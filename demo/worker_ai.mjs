@@ -8,8 +8,9 @@
 import { AgentMesh } from '../sdk/index.mjs'
 import OpenAI from 'openai'
 
-const PRIVATE_KEY = 'REDACTED_PRIVATE_KEY'
+const PRIVATE_KEY = process.env.PRIVATE_KEY
 const DEEPSEEK_KEY = process.env.DEEPSEEK_API_KEY
+if (!PRIVATE_KEY) { console.error('Missing PRIVATE_KEY'); process.exit(1) }
 if (!DEEPSEEK_KEY) { console.error('Missing DEEPSEEK_API_KEY'); process.exit(1) }
 
 const client = new OpenAI({

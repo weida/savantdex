@@ -9,7 +9,8 @@ import { AgentMesh } from '../sdk/index.mjs'
 
 // Demo: requester reuses the main wallet's pre-created stream
 // In production, each user/agent would have their own registered stream
-const PRIVATE_KEY = 'REDACTED_PRIVATE_KEY'
+const PRIVATE_KEY = process.env.PRIVATE_KEY
+if (!PRIVATE_KEY) { console.error('Missing PRIVATE_KEY'); process.exit(1) }
 
 // Worker's stream ID (in production, looked up via registry)
 const WORKER_STREAM = '0x3b00420f3819c58a298bdc91b6c2dd63257eff63/agentmesh/summarizer-v1'
