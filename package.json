@@ -16,6 +16,9 @@
     "web3",
     "pubsub"
   ],
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
   "author": "",
   "license": "MIT",
   "homepage": "https://github.com/weida/savantdex",
