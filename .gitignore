@@ -1,1 +1,7 @@
-wallet.md\n.env\n*.env\n.npmrc
+node_modules/
+.env
+.env.local
+.env.production
+.npmrc
+wallet.md
+workers.config.cjs
