@@ -9,6 +9,7 @@
 
 import { SavantDex } from '../sdk/index.mjs'
 import { loadPrivateKey } from '../sdk/keystore.mjs'
+import { registerToRegistry } from '../sdk/registry.mjs'
 import OpenAI from 'openai'
 
 const DEEPSEEK_KEY = process.env.DEEPSEEK_API_KEY
@@ -97,6 +98,12 @@ const agent = new SavantDex({
 })
 
 await agent.register()
+await registerToRegistry(agent, PRIVATE_KEY, {
+  registryUrl: process.env.REGISTRY_URL || 'http://localhost:3000',
+  capabilities: ['explain-tx', 'blockchain', 'ethereum', 'polygon'],
+  description: 'Explains any Ethereum or Polygon transaction in plain English — what happened, cost, and which protocol was involved.',
+}).catch(e => console.warn('[registry] Registration skipped:', e.message))
+
 console.log('\n=== SavantDex Worker - Transaction Explainer ===')
 console.log('Stream:', await agent.getStreamId())
 console.log('Waiting for tasks...\n')

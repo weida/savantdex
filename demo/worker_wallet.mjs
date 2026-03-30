@@ -9,6 +9,7 @@
 
 import { SavantDex } from '../sdk/index.mjs'
 import { loadPrivateKey } from '../sdk/keystore.mjs'
+import { registerToRegistry } from '../sdk/registry.mjs'
 import OpenAI from 'openai'
 
 const DEEPSEEK_KEY = process.env.DEEPSEEK_API_KEY
@@ -109,6 +110,12 @@ const agent = new SavantDex({
 })
 
 await agent.register()
+await registerToRegistry(agent, PRIVATE_KEY, {
+  registryUrl: process.env.REGISTRY_URL || 'http://localhost:3000',
+  capabilities: ['wallet-analysis', 'portfolio', 'defi'],
+  description: 'Analyzes any Ethereum wallet: holdings, DeFi activity, risk profile, and on-chain history.',
+}).catch(e => console.warn('[registry] Registration skipped:', e.message))
+
 console.log('\n=== SavantDex Worker - Wallet Analyst ===')
 console.log('Stream:', await agent.getStreamId())
 console.log('Waiting for tasks...\n')
