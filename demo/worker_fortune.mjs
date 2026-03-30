@@ -8,14 +8,15 @@
  */
 
 import { SavantDex } from '../sdk/index.mjs'
+import { loadPrivateKey } from '../sdk/keystore.mjs'
 import OpenAI from 'openai'
 
-const PRIVATE_KEY = process.env.PRIVATE_KEY
 const DEEPSEEK_KEY = process.env.DEEPSEEK_API_KEY
-const EXTERNAL_IP = process.env.EXTERNAL_IP || '39.101.135.96'
+const EXTERNAL_IP = process.env.EXTERNAL_IP || '127.0.0.1'
 
-if (!PRIVATE_KEY) { console.error('Missing PRIVATE_KEY'); process.exit(1) }
 if (!DEEPSEEK_KEY) { console.error('Missing DEEPSEEK_API_KEY'); process.exit(1) }
+
+const PRIVATE_KEY = await loadPrivateKey()
 
 const deepseek = new OpenAI({
   apiKey: DEEPSEEK_KEY,
