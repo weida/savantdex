@@ -9,6 +9,7 @@
 
 import { SavantDex } from '../sdk/index.mjs'
 import { loadPrivateKey } from '../sdk/keystore.mjs'
+import { registerToRegistry } from '../sdk/registry.mjs'
 import OpenAI from 'openai'
 
 const DEEPSEEK_KEY = process.env.DEEPSEEK_API_KEY
@@ -57,6 +58,12 @@ const agent = new SavantDex({
 })
 
 await agent.register()
+await registerToRegistry(agent, PRIVATE_KEY, {
+  registryUrl: process.env.REGISTRY_URL || 'http://localhost:3000',
+  capabilities: ['fortune', 'astrology', 'western-astrology'],
+  description: 'Western astrology reading in English — sun sign, planetary energy, lucky elements, and cosmic guidance.',
+}).catch(e => console.warn('[registry] Registration skipped:', e.message))
+
 console.log('\n=== SavantDex Worker - Fortune Teller ===')
 console.log('Stream:', await agent.getStreamId())
 console.log('Waiting for tasks...\n')
