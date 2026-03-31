@@ -8,6 +8,7 @@
  */
 
 import { SavantDex } from '../sdk/index.mjs'
+import { loadSecrets } from '../sdk/secrets.mjs'
 import { loadPrivateKey } from '../sdk/keystore.mjs'
 import { registerToRegistry } from '../sdk/registry.mjs'
 import OpenAI from 'openai'
@@ -17,7 +18,8 @@ const EXTERNAL_IP = process.env.EXTERNAL_IP || '127.0.0.1'
 
 if (!DEEPSEEK_KEY) { console.error('Missing DEEPSEEK_API_KEY'); process.exit(1) }
 
-const PRIVATE_KEY = await loadPrivateKey()
+const { KEYSTORE_PASSWORD } = await loadSecrets()
+const PRIVATE_KEY = await loadPrivateKey(KEYSTORE_PASSWORD)
 
 const deepseek = new OpenAI({
   apiKey: DEEPSEEK_KEY,
