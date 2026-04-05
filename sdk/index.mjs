@@ -13,14 +13,17 @@ export class SavantDex {
 
   /**
    * @param {object} config
-   * @param {string} config.privateKey  - Ethereum private key
-   * @param {string} config.agentId     - Unique agent identifier (e.g. "wallet-analyst-v1")
-   * @param {object} [config.network]   - Optional Streamr network overrides
+   * @param {string} [config.privateKey]  - Ethereum private key (mutually exclusive with identity)
+   * @param {object} [config.identity]    - Streamr Identity instance, e.g. RemoteSignerIdentity
+   * @param {string} config.agentId       - Unique agent identifier (e.g. "wallet-analyst-v1")
+   * @param {object} [config.network]     - Optional Streamr network overrides
    */
-  constructor({ privateKey, agentId, network = {} }) {
-    this.#agentId = agentId
+  constructor({ privateKey, identity, agentId, network = {} }) {
+    if (!privateKey && !identity) throw new Error('[SavantDex] privateKey or identity is required')
+    this.#agentId  = agentId
+    this._signerMode = !privateKey  // true when identity (RemoteSignerIdentity) is used
     this.#client = new StreamrClient({
-      auth: { privateKey },
+      auth: privateKey ? { privateKey } : { identity },
       network: {
         controlLayer: {
           websocketPortRange: network.websocketPort
@@ -50,9 +53,47 @@ export class SavantDex {
   /**
    * Register this agent - creates its inbox stream if not exists, opens public subscribe
    * Call once on first run (costs POL gas). Subsequent runs skip if stream exists.
+   *
+   * Signer mode (identity-based):
+   *   Does NOT create or modify the stream — that requires an on-chain transaction
+   *   which needs a full private key (getTransactionSigner). Instead, this method
+   *   verifies that the stream already exists and has public PUBLISH + SUBSCRIBE.
+   *   If the stream is missing or permissions are absent, a clear error is thrown
+   *   explaining how to pre-create it using setup mode.
+   *
+   *   Pre-create the stream once:
+   *     KEYSTORE_PATH=./setup.keystore.json KEYSTORE_PASSWORD=... \
+   *       node -e "import('./sdk/index.mjs').then(m => new m.SavantDex({ privateKey, agentId }).setup())"
+   *   Or keep calling register() with the setup key on first run.
    */
   async register() {
     const streamId = await this.getStreamId()
+
+    if (this._signerMode) {
+      // Signer mode: verify pre-created stream; never attempt on-chain write
+      let stream
+      try {
+        stream = await this.#client.getStream(streamId)
+      } catch {
+        throw new Error(
+          `[SavantDex] Stream not found in signer mode: ${streamId}\n` +
+          `  Pre-create it once using setup mode (direct privateKey), then switch to signer mode.\n` +
+          `  Setup: KEYSTORE_PATH=./setup.keystore.json node -e "...new SavantDex({ privateKey, agentId }).register()"`
+        )
+      }
+      const isPublicSub = await stream.hasPermission({ permission: StreamPermission.SUBSCRIBE, public: true })
+      const isPublicPub = await stream.hasPermission({ permission: StreamPermission.PUBLISH, public: true })
+      if (!isPublicSub || !isPublicPub) {
+        throw new Error(
+          `[SavantDex] Stream missing public permissions in signer mode: ${streamId}\n` +
+          `  Grant them using setup mode (direct privateKey), then switch to signer mode.`
+        )
+      }
+      console.log(`[SavantDex] Stream verified (signer mode): ${streamId}`)
+      return streamId
+    }
+
+    // Key mode: create stream if needed, grant permissions
     const stream = await this.#client.getOrCreateStream({ id: `/savantdex/${this.#agentId}` })
 
     const isPublicSub = await stream.hasPermission({ permission: StreamPermission.SUBSCRIBE, public: true })
@@ -101,26 +142,45 @@ export class SavantDex {
   async onTask(handler) {
     const streamId = await this.getStreamId()
     await this.#client.subscribe(streamId, async (msg) => {
-      if (!msg.taskId) return
-
-      console.log(`[SavantDex] Task received: ${msg.taskId} (${msg.type})`)
-
-      const reply = async (output) => {
-        if (!msg.replyTo) return
-        await this.#client.publish(msg.replyTo, {
-          taskId: msg.taskId,
-          type: 'result',
-          output,
-          from: await this.getAddress(),
-          ts: Date.now()
-        })
-        console.log(`[SavantDex] Result sent: ${msg.taskId} → ${msg.replyTo}`)
-      }
-
+      // Outer catch: prevent ANY exception from escaping the subscribe callback.
+      // An uncaught async exception here reaches the Streamr SDK's internal
+      // unhandledRejection handler, which tears down the entire network stack
+      // and stops the worker from receiving future tasks.
       try {
-        await handler(msg, reply)
+        if (!msg.taskId) return
+
+        console.log(`[SavantDex] Task received: ${msg.taskId} (${msg.type})`)
+
+        const reply = async (output) => {
+          if (!msg.replyTo) return
+          try {
+            await this.#client.publish(msg.replyTo, {
+              taskId: msg.taskId,
+              type: 'result',
+              output,
+              from: await this.getAddress(),
+              ts: Date.now()
+            })
+            console.log(`[SavantDex] Result sent: ${msg.taskId} → ${msg.replyTo}`)
+          } catch (err) {
+            // Reply stream may not exist (e.g. requester used a stream that was
+            // never set up). Log and continue — this task's reply is lost, but
+            // the worker must keep processing future tasks.
+            console.warn(`[SavantDex] Reply failed for ${msg.taskId} → ${msg.replyTo}: ${err.message}`)
+          }
+        }
+
+        try {
+          await handler(msg, reply)
+        } catch (err) {
+          console.error(`[SavantDex] Handler error for ${msg.taskId}:`, err.message)
+          // Best-effort error reply — also guarded so it cannot throw.
+          await reply({ error: err.message })
+        }
       } catch (err) {
-        await reply({ error: err.message })
+        // Should never reach here, but if it does, log and swallow to protect
+        // the Streamr subscription from being disrupted.
+        console.error(`[SavantDex] Unexpected error in task callback:`, err.message)
       }
     })
 
