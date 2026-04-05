@@ -1,0 +1,96 @@
+// SavantDex Services pm2 Config (Phase 1-Migration)
+//
+// Manages signer-mode backend and workers.
+// All processes hold NO private key — signing delegated to signer-gateway / signer-worker.
+//
+// Prerequisites (must be running before these start):
+//   signer-gateway  port 17099  (see signer.config.cjs)
+//   signer-worker   port 17100  (see signer.config.cjs)
+//   registry        port 3000   (existing pm2 entry)
+//
+// Deploy:
+//   scp services.config.cjs streamr@VPS:/home/streamr/savantdex/services.config.cjs
+//   sudo -u streamr pm2 start /home/streamr/savantdex/services.config.cjs
+//   sudo -u streamr pm2 save
+//
+// SECURITY NOTE:
+//   No private keys in this config — all signing via signer servers.
+//   API keys (DEEPSEEK, ETHERSCAN) are the only secrets here.
+//   Migrate to age-encrypted secrets (SECRETS_PATH + AGE_IDENTITY_PATH) for production.
+
+module.exports = {
+  apps: [
+    // ── API Gateway ────────────────────────────────────────────────────────────
+    {
+      name: 'api-gateway',
+      script: 'backend/server.mjs',
+      cwd: '/home/streamr',
+      env: {
+        SIGNER_ADDRESS:   'YOUR_GATEWAY_ADDRESS',
+        SIGNER_PORT:      '17099',
+        EXTERNAL_IP:      'YOUR_SERVER_IP',
+        REGISTRY_URL:     'http://localhost:3000',
+        PORT:             '4000',
+        METRICS_FILE:     '/path/to/metrics.json',
+      },
+    },
+
+    // ── Wallet Analyst ─────────────────────────────────────────────────────────
+    {
+      name: 'wallet-analyst',
+      script: 'savantdex/demo/worker_wallet.mjs',
+      cwd: '/home/streamr',
+      env: {
+        SIGNER_ADDRESS:   'YOUR_WORKER_ADDRESS',
+        SIGNER_PORT:      '17100',
+        EXTERNAL_IP:      'YOUR_SERVER_IP',
+        REGISTRY_URL:     'http://localhost:3000',
+        DEEPSEEK_API_KEY:  'YOUR_DEEPSEEK_API_KEY',
+        ETHERSCAN_API_KEY: 'YOUR_ETHERSCAN_API_KEY',
+      },
+    },
+
+    // ── Wallet Intelligence ───────────────────────────────────────────────────
+    {
+      name: 'wallet-intelligence',
+      script: 'savantdex/demo/worker_wallet_intelligence.mjs',
+      cwd: '/home/streamr',
+      env: {
+        SIGNER_ADDRESS:    '0x7e712626dbe53a5efa0ef11997fbc7d2c8dc39ba',
+        SIGNER_PORT:       '17100',
+        EXTERNAL_IP:       '34.21.184.167',
+        REGISTRY_URL:      'http://localhost:3000',
+        DEEPSEEK_API_KEY:  'YOUR_DEEPSEEK_API_KEY',
+        ETHERSCAN_API_KEY: 'YOUR_ETHERSCAN_API_KEY',
+      },
+    },
+
+    // ── Transaction Forensics ─────────────────────────────────────────────────
+    {
+      name: 'tx-forensics',
+      script: 'savantdex/demo/worker_tx_forensics.mjs',
+      cwd: '/home/streamr',
+      env: {
+        SIGNER_ADDRESS:    '0x7e712626dbe53a5efa0ef11997fbc7d2c8dc39ba',
+        SIGNER_PORT:       '17100',
+        EXTERNAL_IP:       '34.21.184.167',
+        REGISTRY_URL:      'http://localhost:3000',
+        DEEPSEEK_API_KEY:  'YOUR_DEEPSEEK_API_KEY',
+        ETHERSCAN_API_KEY: 'YOUR_ETHERSCAN_API_KEY',
+      },
+    },
+
+    // ── Token Risk Screener ────────────────────────────────────────────────────
+    {
+      name: 'token-risk-screener',
+      script: 'savantdex/demo/worker_token_risk.mjs',
+      cwd: '/home/streamr',
+      env: {
+        SIGNER_ADDRESS:   'YOUR_WORKER_ADDRESS',
+        SIGNER_PORT:      '17100',
+        EXTERNAL_IP:      'YOUR_SERVER_IP',
+        REGISTRY_URL:     'http://localhost:3000',
+      },
+    },
+  ],
+}

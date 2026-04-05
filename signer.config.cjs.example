@@ -1,0 +1,44 @@
+// SavantDex Signer Server pm2 Config
+//
+// Manages two signer instances:
+//   - signer-gateway  (port 17099)  holds gateway.keystore.json
+//   - signer-worker   (port 17100)  holds worker.keystore.json
+//
+// Deploy to VPS:
+//   scp signer.config.cjs streamr@VPS:/home/streamr/savantdex/signer.config.cjs
+//   sudo -u streamr pm2 start /home/streamr/savantdex/signer.config.cjs
+//   sudo -u streamr pm2 save
+//
+// SECURITY NOTE (test environment):
+//   KEYSTORE_PASSWORD is set inline below — acceptable for test/migration phase only.
+//   Before production, replace with:
+//     SECRETS_PATH=/secure/gateway.secrets.age
+//     AGE_IDENTITY_PATH=/secure/age-identity.key
+//   and remove KEYSTORE_PASSWORD entirely (see savantdex/sdk/secrets.mjs).
+
+module.exports = {
+  apps: [
+    {
+      name: 'signer-gateway',
+      script: 'signer/server.mjs',
+      cwd: '/home/streamr/savantdex',
+      env: {
+        KEYSTORE_PATH:     './gateway.keystore.json',
+        KEYSTORE_PASSWORD: 'FILL_IN',   // TODO: migrate to SECRETS_PATH + AGE_IDENTITY_PATH
+        SIGNER_LABEL:      'gateway',
+        SIGNER_PORT:       '17099',
+      },
+    },
+    {
+      name: 'signer-worker',
+      script: 'signer/server.mjs',
+      cwd: '/home/streamr/savantdex',
+      env: {
+        KEYSTORE_PATH:     './worker.keystore.json',
+        KEYSTORE_PASSWORD: 'FILL_IN',   // TODO: migrate to SECRETS_PATH + AGE_IDENTITY_PATH
+        SIGNER_LABEL:      'worker',
+        SIGNER_PORT:       '17100',
+      },
+    },
+  ],
+}

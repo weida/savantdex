@@ -5,5 +5,7 @@ node_modules/
 .npmrc
 wallet.md
 workers.config.cjs
+services.config.cjs
+signer.config.cjs
 keystore.json
 *.keystore.json

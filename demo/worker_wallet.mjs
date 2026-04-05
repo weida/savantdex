@@ -5,23 +5,49 @@
  * Handles task type: 'analyze-wallet'
  * Input: { address: '0x...' }
  * Output: { analysis, holdings, txCount, firstSeen, riskLevel }
+ *
+ * Key model (Phase 1-Migration):
+ *   Worker holds NO private key. All Streamr signing is delegated to
+ *   signer/server.mjs running on 127.0.0.1:SIGNER_PORT.
+ *   Registry authorization is also signed by the signer server
+ *   (valid because owner == runtime in demo phase).
+ *
+ * Required env (signer mode):
+ *   SIGNER_ADDRESS   Worker runtime address (printed by signer/server.mjs on startup)
+ *   SIGNER_PORT      Signer server port (default: 17099)
+ *
+ * Legacy env (still works if no SIGNER_ADDRESS is set):
+ *   KEYSTORE_PATH, KEYSTORE_PASSWORD (or SECRETS_PATH + AGE_IDENTITY_PATH)
  */
 
 import { SavantDex } from '../sdk/index.mjs'
+import { RemoteSignerIdentity } from '../sdk/remote-identity.mjs'
 import { loadSecrets } from '../sdk/secrets.mjs'
 import { loadPrivateKey } from '../sdk/keystore.mjs'
 import { registerToRegistry } from '../sdk/registry.mjs'
 import OpenAI from 'openai'
 
-const DEEPSEEK_KEY = process.env.DEEPSEEK_API_KEY
-const ETHERSCAN_KEY = process.env.ETHERSCAN_API_KEY
-const EXTERNAL_IP = process.env.EXTERNAL_IP || '127.0.0.1'
+const DEEPSEEK_KEY   = process.env.DEEPSEEK_API_KEY
+const ETHERSCAN_KEY  = process.env.ETHERSCAN_API_KEY
+const EXTERNAL_IP    = process.env.EXTERNAL_IP    || '127.0.0.1'
+const SIGNER_ADDRESS = process.env.SIGNER_ADDRESS
+const SIGNER_PORT    = Number(process.env.SIGNER_PORT || 17099)
 
-if (!DEEPSEEK_KEY) { console.error('Missing DEEPSEEK_API_KEY'); process.exit(1) }
+if (!DEEPSEEK_KEY)  { console.error('Missing DEEPSEEK_API_KEY');  process.exit(1) }
 if (!ETHERSCAN_KEY) { console.error('Missing ETHERSCAN_API_KEY'); process.exit(1) }
 
-const { KEYSTORE_PASSWORD } = await loadSecrets()
-const PRIVATE_KEY = await loadPrivateKey(KEYSTORE_PASSWORD)
+// --- Auth: signer server (preferred) or legacy keystore ---
+let workerAuth, ownerPrivateKey, registrySignerUrl
+if (SIGNER_ADDRESS) {
+  console.log(`[wallet-analyst] Using remote signer: ${SIGNER_ADDRESS} on port ${SIGNER_PORT}`)
+  workerAuth = { identity: new RemoteSignerIdentity(SIGNER_ADDRESS, SIGNER_PORT) }
+  registrySignerUrl = `http://127.0.0.1:${SIGNER_PORT}`
+} else {
+  console.warn('[wallet-analyst] SIGNER_ADDRESS not set — falling back to local keystore (legacy mode)')
+  const { KEYSTORE_PASSWORD } = await loadSecrets()
+  ownerPrivateKey = await loadPrivateKey(KEYSTORE_PASSWORD)
+  workerAuth = { privateKey: ownerPrivateKey }
+}
 
 const deepseek = new OpenAI({
   apiKey: DEEPSEEK_KEY,
@@ -106,13 +132,13 @@ function summarizeWalletData(address, data) {
 }
 
 const agent = new SavantDex({
-  privateKey: PRIVATE_KEY,
+  ...workerAuth,
   agentId: 'wallet-analyst-v1',
   network: { websocketPort: 32205, externalIp: EXTERNAL_IP }
 })
 
 await agent.register()
-await registerToRegistry(agent, PRIVATE_KEY, {
+await registerToRegistry(agent, ownerPrivateKey || null, {
   registryUrl: process.env.REGISTRY_URL || 'http://localhost:3000',
   capabilities: ['wallet-analysis', 'portfolio', 'defi'],
   description: 'Analyzes any Ethereum wallet: holdings, DeFi activity, risk profile, and on-chain history.',
@@ -123,6 +149,7 @@ await registerToRegistry(agent, PRIVATE_KEY, {
   inputSchema: [
     { key: 'address', label: 'Ethereum Address', type: 'text', required: true, placeholder: '0x...', hint: 'Any EVM-compatible wallet address' }
   ],
+  ...(registrySignerUrl ? { signerUrl: registrySignerUrl } : {}),
 }).catch(e => console.warn('[registry] Registration skipped:', e.message))
 
 console.log('\n=== SavantDex Worker - Wallet Analyst ===')
