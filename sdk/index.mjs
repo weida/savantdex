@@ -27,7 +27,7 @@ export class SavantDex {
       network: {
         controlLayer: {
           websocketPortRange: network.websocketPort
-            ? { min: network.websocketPort, max: network.websocketPort }
+            ? { min: network.websocketPort, max: network.websocketPortMax ?? network.websocketPort + 10 }
             : undefined,
           externalIp: network.externalIp
         }

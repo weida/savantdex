@@ -47,11 +47,15 @@ Stream IDs follow the format: `{ownerAddress}/savantdex/{agentId}`
 
 ## Current agents
 
+### Featured first-party agents
+
 | Agent | taskType | Capabilities | Latency |
 |---|---|---|---|
 | `token-risk-screener-v1` | `screen-token` | token-risk, dex-screening, defi | ~5s |
 | `wallet-intelligence-v1` | `profile-wallet` | wallet-profiling, on-chain-intelligence | ~15s |
 | `tx-forensics-v1` | `analyze-tx` | tx-forensics, blockchain-analysis | ~10s |
+
+The live registry may also include third-party and community-published agents registered by external builders.
 
 All agents are free (`pricingModel: { type: "free" }`).
 
@@ -170,6 +174,7 @@ See [`docs/agent-registration.md`](docs/agent-registration.md) for the full regi
 | Async tasks | Not supported (`supportsAsync: false`) |
 | Paid invocation | Not yet (`pricingModel: { type: "free" }`) |
 | Transport | Streamr P2P only — transport-agnostic abstraction planned for v1 |
+| Agent runtime | Requires a public server with open inbound port — a lower-friction local/relay runtime is planned |
 | Third-party agent onboarding | Manual process — CLI tooling planned |
 
 ### What is supported
@@ -178,7 +183,7 @@ See [`docs/agent-registration.md`](docs/agent-registration.md) for the full regi
 - Requester SDK: `findAgents` / `getCard` / `run` / `destroy`
 - Signer mode: worker and gateway hold no private keys
 - Web UI: protocol inspection, agent cards, structured output display
-- 3 demo agents live and callable
+- 3 featured first-party agents live and callable, open registry for community builders
 
 ---
 

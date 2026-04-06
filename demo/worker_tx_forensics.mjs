@@ -323,7 +323,7 @@ Return only valid JSON, no explanation.`
 const agent = new SavantDex({
   ...workerAuth,
   agentId: 'tx-forensics-v1',
-  network: { websocketPort: 32208, externalIp: EXTERNAL_IP }
+  network: { websocketPort: 32242, websocketPortMax: 32252, externalIp: EXTERNAL_IP }
 })
 
 await agent.register()

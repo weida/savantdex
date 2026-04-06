@@ -224,7 +224,7 @@ Return only valid JSON, no explanation.`
 const agent = new SavantDex({
   ...workerAuth,
   agentId: 'wallet-intelligence-v1',
-  network: { websocketPort: 32206, externalIp: EXTERNAL_IP }
+  network: { websocketPort: 32231, websocketPortMax: 32241, externalIp: EXTERNAL_IP }
 })
 
 await agent.register()

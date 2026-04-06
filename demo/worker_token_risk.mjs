@@ -43,6 +43,13 @@ if (SIGNER_ADDRESS) {
 
 const DEXSCREENER_BASE = 'https://api.dexscreener.com'
 
+// EVM chain allowlist — excludes Solana, Aptos, Sui, NEAR, Tron, TON, etc.
+const EVM_CHAINS = new Set([
+  'ethereum', 'bsc', 'polygon', 'arbitrum', 'optimism', 'avalanche',
+  'base', 'fantom', 'cronos', 'gnosis', 'celo', 'moonbeam', 'metis',
+  'zksync', 'linea', 'scroll', 'blast', 'mantle', 'mode', 'manta',
+])
+
 async function fetchPairs(token) {
   // Supports both contract address and symbol search
   const isAddress = /^0x[0-9a-fA-F]{40}$/.test(token)
@@ -63,6 +70,23 @@ function selectBestPair(pairs) {
   if (!pairs.length) return null
   // Prefer highest liquidity pair
   return pairs.sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))[0]
+}
+
+// Filter to EVM-only pairs, then deduplicate by base token address.
+// Returns unique token representatives (one pair per unique contract address).
+function getEvmCandidates(pairs) {
+  const evmPairs = pairs.filter(p => EVM_CHAINS.has(p.chainId?.toLowerCase()))
+  const seen = new Map() // `chain:address` -> best liquidity pair for that token
+  for (const pair of evmPairs) {
+    const addr  = pair.baseToken?.address?.toLowerCase()
+    const chain = pair.chainId?.toLowerCase()
+    if (!addr || !chain) continue
+    const key = `${chain}:${addr}`
+    if (!seen.has(key) || (pair.liquidity?.usd || 0) > (seen.get(key).liquidity?.usd || 0)) {
+      seen.set(key, pair)
+    }
+  }
+  return { evmPairs, uniqueTokens: Array.from(seen.values()) }
 }
 
 function analyzeRisk(pair, allPairs) {
@@ -149,7 +173,7 @@ function buildSummary(pair, riskLevel, flags) {
 const agent = new SavantDex({
   ...workerAuth,
   agentId: 'token-risk-screener-v1',
-  network: { websocketPort: 32207, externalIp: EXTERNAL_IP }
+  network: { websocketPort: 32220, websocketPortMax: 32230, externalIp: EXTERNAL_IP }
 })
 
 await agent.register()
@@ -169,11 +193,13 @@ await registerToRegistry(agent, ownerPrivateKey || null, {
       placeholder: '0x... or PEPE', hint: 'EVM contract address (recommended) or token symbol' }
   ],
   outputSchema: [
+    { key: 'status',      type: 'string', description: 'completed | needs_disambiguation | failed (present when not completed)' },
     { key: 'tokenInfo',   type: 'object', description: 'name, symbol, address, chain, dex' },
     { key: 'marketData',  type: 'object', description: 'price, priceChange24h, liquidity, volume24h, marketCap, fdv, txns24h, pairAgeDays' },
     { key: 'riskFlags',   type: 'array',  description: 'array of { flag, severity, detail }' },
     { key: 'riskLevel',   type: 'string', description: 'LOW | MEDIUM | HIGH | CRITICAL' },
     { key: 'summary',     type: 'string', description: 'human-readable one-paragraph summary' },
+    { key: 'candidates',  type: 'array',  description: 'present when needs_disambiguation: [{ symbol, name, chain, dex, address, liquidityUsd }]' },
   ],
   taskType:          'screen-token',
   protocolVersion:   '1.0',
@@ -203,14 +229,53 @@ await agent.onTask(async (task, reply) => {
 
   console.log(`[token-risk] Screening: ${token}`)
 
+  const isAddress = /^0x[0-9a-fA-F]{40}$/.test(token)
+
   try {
     const pairs = await fetchPairs(token)
     if (!pairs.length) {
-      return reply({ error: `No pairs found for: ${token}` })
+      return reply({ status: 'failed', error: `No pairs found for: ${token}` })
     }
 
-    const best = selectBestPair(pairs)
-    const { flags, riskLevel } = analyzeRisk(best, pairs)
+    let best, allPairs
+
+    if (isAddress) {
+      // Contract address: use all pairs directly (no chain ambiguity)
+      allPairs = pairs
+      best = selectBestPair(allPairs)
+    } else {
+      // Symbol: filter to EVM, deduplicate by base token address
+      const { evmPairs, uniqueTokens } = getEvmCandidates(pairs)
+
+      if (uniqueTokens.length === 0) {
+        return reply({ status: 'failed', error: `No EVM token pairs found for symbol: ${token}. Try using the contract address (token:0x...).` })
+      }
+
+      if (uniqueTokens.length > 1) {
+        // Ambiguous: multiple distinct EVM tokens share this symbol
+        return reply({
+          status: 'needs_disambiguation',
+          error: `Multiple EVM token matches found for symbol "${token}". Provide a contract address.`,
+          candidates: uniqueTokens
+            .sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))
+            .map(p => ({
+              symbol:       p.baseToken?.symbol,
+              name:         p.baseToken?.name,
+              chain:        p.chainId,
+              dex:          p.dexId,
+              address:      p.baseToken?.address,
+              liquidityUsd: Math.round(p.liquidity?.usd || 0),
+            })),
+        })
+      }
+
+      // Exactly 1 unique EVM token — use the best pair for that token
+      const tokenAddr = uniqueTokens[0].baseToken?.address?.toLowerCase()
+      allPairs = evmPairs.filter(p => p.baseToken?.address?.toLowerCase() === tokenAddr)
+      best = selectBestPair(allPairs)
+    }
+
+    const { flags, riskLevel } = analyzeRisk(best, allPairs)
     const summary = buildSummary(best, riskLevel, flags)
 
     console.log(`  Risk: ${riskLevel} | Flags: ${flags.map(f => f.flag).join(', ') || 'none'}`)

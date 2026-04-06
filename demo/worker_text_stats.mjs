@@ -59,7 +59,7 @@ function analyzeText(text) {
 const agent = new SavantDex({
   ...workerAuth,
   agentId: 'text-stats-v1',
-  network: { websocketPort: 32208, externalIp: EXTERNAL_IP },
+  network: { websocketPort: 32253, websocketPortMax: 32263, externalIp: EXTERNAL_IP },
 })
 
 await agent.register()
