@@ -263,7 +263,13 @@ await registerToRegistry(agent, ownerPrivateKey || null, {
   supportsAsync:     false,
   expectedLatencyMs: 15000,
   authType:          'none',
-  pricingModel:      { type: 'free' },
+  pricingModel:      {
+    type:            'fixed',
+    currency:        'DATA',
+    amountBaseUnits: '1000000000000000000',  // 1 DATA per task
+    decimals:        18,
+    billingUnit:     'task',
+  },
   ...(registrySignerUrl ? { signerUrl: registrySignerUrl } : {}),
 }).catch(e => console.warn('[registry] Registration skipped:', e.message))
 
