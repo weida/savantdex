@@ -117,8 +117,8 @@ export class SavantDex {
    * @param {any}    task.input     - Task input data
    * @returns {string} taskId
    */
-  async sendTask(targetStreamId, { type, input }) {
-    const taskId = `task-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  async sendTask(targetStreamId, { type, input, taskId: providedTaskId }) {
+    const taskId = providedTaskId || `task-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     const replyStreamId = await this.getStreamId()
 
     await this.#client.publish(targetStreamId, {
