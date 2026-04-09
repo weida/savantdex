@@ -5,7 +5,8 @@
   "description": "Decentralized AI agent marketplace SDK built on Streamr Network",
   "main": "sdk/index.mjs",
   "exports": {
-    ".": "./sdk/index.mjs"
+    ".": "./sdk/index.mjs",
+    "./gateway": "./sdk/gateway-requester.mjs"
   },
   "keywords": [
     "ai-agent",
