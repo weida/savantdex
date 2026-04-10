@@ -264,6 +264,10 @@ export class GatewayRequester {
 
   // ── Internal ─────────────────────────────────────────────────────────────────
 
+  #requireWalletAuth() {
+    if (this.#auth.type !== 'wallet') throw new Error('wallet auth required — create with signer, not apiKey')
+  }
+
   async #getAuthHeaders() {
     if (this.#auth.type === 'api-key') {
       return { 'X-API-Key': this.#auth.key }
@@ -340,12 +344,7 @@ export class GatewayRequester {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function _defaultRegistryUrl(gatewayUrl) {
-  try {
-    const u = new URL(gatewayUrl)
-    u.port = '3000'
-    u.pathname = '/'
-    return u.origin
-  } catch {
-    return 'http://localhost:3000'
-  }
+  // Default: same host as gateway (gateway already proxies /agents endpoints).
+  // Callers can override with an explicit registryUrl for split deployments.
+  return gatewayUrl.replace(/\/$/, '')
 }

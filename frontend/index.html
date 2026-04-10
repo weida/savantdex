@@ -271,12 +271,8 @@ function gatewayUrl()       { return document.getElementById('gatewayUrl').value
 function requesterAgentId() { return document.getElementById('requesterAgentId').value.trim() }
 
 function registryUrlFrom(gw) {
-  try {
-    const u = new URL(gw)
-    u.port = '3000'
-    u.pathname = '/'
-    return u.origin
-  } catch { return 'http://localhost:3000' }
+  // Default: same host as gateway (gateway already proxies /agents endpoints).
+  return gw.replace(/\/$/, '')
 }
 
 // ── UI update ─────────────────────────────────────────────────────────────────
