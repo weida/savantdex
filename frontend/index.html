@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SavantDex — Wallet Auth Demo</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --border: #2a2d3e;
+      --accent: #6366f1;
+      --accent-hover: #818cf8;
+      --success: #22c55e;
+      --warn: #f59e0b;
+      --error: #ef4444;
+      --text: #e2e8f0;
+      --muted: #64748b;
+      --mono: 'JetBrains Mono', 'Fira Code', monospace;
+    }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, sans-serif;
+      font-size: 14px;
+      line-height: 1.6;
+      min-height: 100vh;
+      padding: 24px;
+    }
+    h1 { font-size: 1.4rem; font-weight: 600; margin-bottom: 4px; }
+    h2 { font-size: 1rem; font-weight: 600; margin-bottom: 12px; }
+    p.sub { color: var(--muted); font-size: 13px; margin-bottom: 24px; }
+
+    .layout { max-width: 860px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 20px;
+    }
+
+    label {
+      display: block;
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 4px;
+      text-transform: uppercase;
+      letter-spacing: .05em;
+    }
+    input, textarea {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 13px;
+      padding: 8px 10px;
+      outline: none;
+      transition: border-color .15s;
+    }
+    input:focus, textarea:focus { border-color: var(--accent); }
+    textarea { resize: vertical; min-height: 80px; }
+
+    .row { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
+    .row > * { flex: 1; min-width: 180px; }
+    .row > button { flex: 0 0 auto; }
+
+    button {
+      padding: 8px 18px;
+      border-radius: 6px;
+      border: none;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background .15s, opacity .15s;
+      white-space: nowrap;
+    }
+    button:disabled { opacity: .45; cursor: not-allowed; }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-primary:not(:disabled):hover { background: var(--accent-hover); }
+    .btn-ghost { background: transparent; border: 1px solid var(--border); color: var(--text); }
+    .btn-ghost:not(:disabled):hover { border-color: var(--accent); color: var(--accent); }
+    .btn-danger { background: transparent; border: 1px solid var(--error); color: var(--error); }
+    .btn-danger:not(:disabled):hover { background: var(--error); color: #fff; }
+
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 100px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+    }
+    .badge-disconnected { background: #374151; color: var(--muted); }
+    .badge-signing      { background: #78350f; color: var(--warn); }
+    .badge-active       { background: #14532d; color: var(--success); }
+    .badge-expired      { background: #450a0a; color: var(--error); }
+
+    .session-strip {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .log {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-family: var(--mono);
+      font-size: 12px;
+      padding: 12px;
+      height: 280px;
+      overflow-y: auto;
+    }
+    .log-line { display: flex; gap: 8px; line-height: 1.7; }
+    .log-ts   { color: var(--muted); flex-shrink: 0; }
+    .log-ok   { color: var(--success); }
+    .log-err  { color: var(--error); }
+    .log-warn { color: var(--warn); }
+    .log-dim  { color: var(--muted); }
+
+    .result-box {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-family: var(--mono);
+      font-size: 12px;
+      padding: 12px;
+      min-height: 60px;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    .divider { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
+    .help { font-size: 12px; color: var(--muted); margin-top: 8px; }
+    code { font-family: var(--mono); font-size: 12px; background: var(--border); padding: 1px 4px; border-radius: 3px; }
+
+    @media (max-width: 600px) { .row { flex-direction: column; } }
+  </style>
+</head>
+<body>
+<div class="layout">
+
+  <div>
+    <h1>SavantDex — Wallet Auth Demo</h1>
+    <p class="sub">Connect MetaMask, sign a challenge, and call an agent through the gateway.</p>
+  </div>
+
+  <!-- Configuration -->
+  <div class="card">
+    <h2>Configuration</h2>
+    <div class="row">
+      <div>
+        <label>Gateway URL</label>
+        <input id="gatewayUrl" type="text" value="http://localhost:4000" />
+      </div>
+      <div>
+        <label>requesterAgentId</label>
+        <input id="requesterAgentId" type="text" placeholder="my-bot-v1" />
+      </div>
+    </div>
+    <p class="help">
+      The <code>requesterAgentId</code> must be registered and have a wallet binding for your address.
+      Ask an admin to run <code>POST /admin/requesters/:id/auth-methods</code>.
+    </p>
+  </div>
+
+  <!-- Wallet & Session -->
+  <div class="card">
+    <h2>Wallet &amp; Session</h2>
+    <div class="session-strip">
+      <span class="badge badge-disconnected" id="sessionBadge">Disconnected</span>
+      <span id="sessionAddress">—</span>
+      <span id="sessionExpiry"></span>
+      <span id="sessionTimer"></span>
+    </div>
+    <hr class="divider" />
+    <div class="row">
+      <button class="btn-primary" id="btnConnect" onclick="connectWallet()">Connect MetaMask</button>
+      <button class="btn-ghost"   id="btnSign"    onclick="signIn()"       disabled>Sign in</button>
+      <button class="btn-danger"  id="btnRevoke"  onclick="revokeSession()" disabled>Revoke session</button>
+    </div>
+    <p class="help">Sessions last <strong>15 minutes</strong>. No silent refresh — sign in again when expired.</p>
+  </div>
+
+  <!-- Agent Call -->
+  <div class="card">
+    <h2>Call Agent</h2>
+    <div class="row">
+      <div>
+        <label>Agent ID</label>
+        <input id="agentId" type="text" placeholder="wallet-intelligence-v1" />
+      </div>
+      <div>
+        <label>Timeout (ms)</label>
+        <input id="taskTimeout" type="number" value="30000" min="1000" max="120000" step="1000" />
+      </div>
+    </div>
+    <div style="margin-top:10px">
+      <label>Input (JSON)</label>
+      <textarea id="taskInput" placeholder='{"wallet": "0x..."}'></textarea>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button class="btn-primary" id="btnRun" onclick="runTask()" disabled>Run task</button>
+    </div>
+    <div style="margin-top:14px">
+      <label>Result</label>
+      <div class="result-box" id="taskResult">—</div>
+    </div>
+  </div>
+
+  <!-- Log -->
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <h2 style="margin:0">Activity log</h2>
+      <button class="btn-ghost" onclick="clearLog()" style="padding:4px 10px;font-size:11px">Clear</button>
+    </div>
+    <div class="log" id="logPane"></div>
+  </div>
+
+</div>
+<script>
+'use strict'
+
+// ── State ─────────────────────────────────────────────────────────────────────
+
+const state = {
+  address: null,        // connected wallet address (lowercase)
+  session: null,        // { token: string, expiresAt: Date }
+  timerInterval: null,
+}
+
+// ── Log ───────────────────────────────────────────────────────────────────────
+
+function log(type, text) {
+  const pane = document.getElementById('logPane')
+  const ts   = new Date().toTimeString().slice(0, 8)
+
+  const line  = document.createElement('div')
+  line.className = 'log-line'
+
+  const tsEl  = document.createElement('span')
+  tsEl.className = 'log-ts'
+  tsEl.textContent = '[' + ts + ']'
+
+  const msgEl = document.createElement('span')
+  msgEl.className = 'log-' + type
+  msgEl.textContent = text
+
+  line.appendChild(tsEl)
+  line.appendChild(msgEl)
+  pane.appendChild(line)
+  pane.scrollTop = pane.scrollHeight
+}
+
+function clearLog() {
+  const pane = document.getElementById('logPane')
+  while (pane.firstChild) pane.removeChild(pane.firstChild)
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function gatewayUrl()       { return document.getElementById('gatewayUrl').value.replace(/\/$/, '') }
+function requesterAgentId() { return document.getElementById('requesterAgentId').value.trim() }
+
+function registryUrlFrom(gw) {
+  try {
+    const u = new URL(gw)
+    u.port = '3000'
+    u.pathname = '/'
+    return u.origin
+  } catch { return 'http://localhost:3000' }
+}
+
+// ── UI update ─────────────────────────────────────────────────────────────────
+
+function updateUI() {
+  const { address, session } = state
+  const badge     = document.getElementById('sessionBadge')
+  const addrEl    = document.getElementById('sessionAddress')
+  const expiryEl  = document.getElementById('sessionExpiry')
+  const btnSign   = document.getElementById('btnSign')
+  const btnRevoke = document.getElementById('btnRevoke')
+  const btnRun    = document.getElementById('btnRun')
+  const btnConn   = document.getElementById('btnConnect')
+
+  if (!address) {
+    badge.className   = 'badge badge-disconnected'
+    badge.textContent = 'Disconnected'
+    addrEl.textContent   = '—'
+    expiryEl.textContent = ''
+    btnConn.disabled   = false
+    btnSign.disabled   = true
+    btnRevoke.disabled = true
+    btnRun.disabled    = true
+    return
+  }
+
+  btnConn.disabled   = true
+  addrEl.textContent = address.slice(0, 6) + '…' + address.slice(-4)
+
+  const sessionActive = session && session.expiresAt > new Date()
+  if (sessionActive) {
+    badge.className   = 'badge badge-active'
+    badge.textContent = 'Active'
+    expiryEl.textContent = 'Expires ' + session.expiresAt.toLocaleTimeString()
+    btnRevoke.disabled = false
+    btnRun.disabled    = false
+  } else {
+    badge.className   = session ? 'badge badge-expired' : 'badge badge-disconnected'
+    badge.textContent = session ? 'Expired' : 'No session'
+    expiryEl.textContent = session ? ('Expired ' + session.expiresAt.toLocaleTimeString()) : ''
+    btnRevoke.disabled = true
+    btnRun.disabled    = true
+  }
+  btnSign.disabled = false
+}
+
+function startSessionTimer() {
+  if (state.timerInterval) clearInterval(state.timerInterval)
+  state.timerInterval = setInterval(function () {
+    const timerEl = document.getElementById('sessionTimer')
+    if (!state.session) { timerEl.textContent = ''; return }
+    const ms = state.session.expiresAt - Date.now()
+    if (ms <= 0) {
+      timerEl.textContent = ''
+      clearInterval(state.timerInterval)
+      log('warn', 'Session expired — sign in again')
+      updateUI()
+      return
+    }
+    const m = Math.floor(ms / 60000)
+    const s = Math.floor((ms % 60000) / 1000)
+    timerEl.textContent = '(' + m + ':' + String(s).padStart(2, '0') + ' remaining)'
+  }, 1000)
+}
+
+// ── Connect wallet ────────────────────────────────────────────────────────────
+
+async function connectWallet() {
+  if (!window.ethereum) {
+    log('err', 'MetaMask not detected — install the extension first')
+    return
+  }
+  try {
+    log('dim', 'Requesting accounts from MetaMask…')
+    const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' })
+    state.address = accounts[0].toLowerCase()
+    log('ok', 'Connected: ' + accounts[0])
+    updateUI()
+  } catch (e) {
+    log('err', 'Connect failed: ' + e.message)
+  }
+}
+
+// ── Sign in ───────────────────────────────────────────────────────────────────
+
+async function signIn() {
+  const gw      = gatewayUrl()
+  const agentId = requesterAgentId()
+
+  if (!state.address) { log('err', 'Connect wallet first'); return }
+  if (!agentId)       { log('err', 'requesterAgentId is required'); return }
+
+  const badge   = document.getElementById('sessionBadge')
+  const btnSign = document.getElementById('btnSign')
+  badge.className   = 'badge badge-signing'
+  badge.textContent = 'Signing…'
+  btnSign.disabled  = true
+
+  try {
+    // Step 1: request challenge
+    log('dim', '→ POST ' + gw + '/auth/challenge')
+    const cRes = await fetch(gw + '/auth/challenge', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ requesterAgentId: agentId, ownerAddress: state.address }),
+    })
+    if (!cRes.ok) {
+      const body = await cRes.json().catch(function () { return {} })
+      throw new Error(body.error || 'Challenge failed (' + cRes.status + ')')
+    }
+    const { challengeId, message } = await cRes.json()
+    log('ok', 'Challenge received (id: ' + challengeId.slice(0, 12) + '…)')
+
+    // Step 2: personal_sign via MetaMask
+    log('dim', 'Waiting for MetaMask personal_sign…')
+    const signature = await window.ethereum.request({
+      method: 'personal_sign',
+      params: [message, state.address],
+    })
+    log('ok', 'Signature obtained (' + signature.slice(0, 14) + '…)')
+
+    // Step 3: verify signature with gateway
+    log('dim', '→ POST ' + gw + '/auth/verify-signature')
+    const vRes = await fetch(gw + '/auth/verify-signature', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ challengeId, signature }),
+    })
+    if (!vRes.ok) {
+      const body = await vRes.json().catch(function () { return {} })
+      throw new Error(body.error || 'Verify failed (' + vRes.status + ')')
+    }
+    const { sessionToken, expiresAt } = await vRes.json()
+    state.session = { token: sessionToken, expiresAt: new Date(expiresAt) }
+    log('ok', 'Session active — expires ' + state.session.expiresAt.toLocaleTimeString())
+    startSessionTimer()
+    updateUI()
+  } catch (e) {
+    log('err', 'Sign-in failed: ' + e.message)
+    updateUI()
+  }
+}
+
+// ── Revoke session ────────────────────────────────────────────────────────────
+
+async function revokeSession() {
+  if (!state.session) return
+  const gw = gatewayUrl()
+  log('dim', '→ POST ' + gw + '/auth/session/revoke')
+  try {
+    await fetch(gw + '/auth/session/revoke', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ sessionToken: state.session.token }),
+    })
+    log('ok', 'Session revoked')
+  } catch (e) {
+    log('warn', 'Revoke request failed: ' + e.message + ' (cleared locally)')
+  } finally {
+    state.session = null
+    if (state.timerInterval) clearInterval(state.timerInterval)
+    document.getElementById('sessionTimer').textContent = ''
+    updateUI()
+  }
+}
+
+// ── Run task ──────────────────────────────────────────────────────────────────
+
+async function runTask() {
+  const gw      = gatewayUrl()
+  const agentId = document.getElementById('agentId').value.trim()
+  const timeout = Number(document.getElementById('taskTimeout').value)
+  const inputRaw = document.getElementById('taskInput').value.trim()
+  const resultEl = document.getElementById('taskResult')
+
+  if (!agentId) { log('err', 'Agent ID is required'); return }
+  if (!state.session || state.session.expiresAt <= new Date()) {
+    log('err', 'Session expired or missing — sign in first')
+    updateUI(); return
+  }
+
+  let input
+  try { input = inputRaw ? JSON.parse(inputRaw) : {} }
+  catch { log('err', 'Input is not valid JSON'); return }
+
+  resultEl.textContent = 'Running…'
+  document.getElementById('btnRun').disabled = true
+
+  try {
+    // Resolve taskType from registry
+    const regUrl = registryUrlFrom(gw)
+    log('dim', '→ GET ' + regUrl + '/agents/' + encodeURIComponent(agentId))
+    const rRes = await fetch(regUrl + '/agents/' + encodeURIComponent(agentId))
+    if (!rRes.ok) throw new Error('Agent not found: ' + agentId)
+    const record   = await rRes.json()
+    const taskType = record.callHint && record.callHint.taskType
+    if (!taskType) throw new Error('Agent has no callHint.taskType')
+    log('dim', 'Task type: ' + taskType)
+
+    // POST /task
+    log('dim', '→ POST ' + gw + '/task (timeout=' + timeout + 'ms)')
+    const controller = new AbortController()
+    const timer = setTimeout(function () { controller.abort() }, timeout)
+    let res
+    try {
+      res = await fetch(gw + '/task', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Session-Token': state.session.token },
+        body:    JSON.stringify({ agentId, type: taskType, input }),
+        signal:  controller.signal,
+      })
+    } finally {
+      clearTimeout(timer)
+    }
+
+    if (!res.ok) {
+      const body = await res.json().catch(function () { return {} })
+      throw new Error(body.error || 'Gateway error ' + res.status)
+    }
+
+    const data     = await res.json()
+    const hasError = data.result && typeof data.result.error === 'string'
+    const result   = {
+      taskId: data.taskId,
+      status: hasError ? 'failed' : 'completed',
+      output: hasError ? null : data.result,
+      error:  hasError ? data.result.error : null,
+    }
+
+    log(hasError ? 'err' : 'ok', 'Task ' + result.status + ' (id: ' + result.taskId + ')')
+    resultEl.textContent = JSON.stringify(result, null, 2)
+  } catch (e) {
+    const label = e.name === 'AbortError' ? 'Timed out after ' + timeout + 'ms' : e.message
+    log('err', 'Task failed: ' + label)
+    resultEl.textContent = 'Error: ' + label
+  } finally {
+    document.getElementById('btnRun').disabled = !state.session || state.session.expiresAt <= new Date()
+  }
+}
+
+// ── MetaMask account change ───────────────────────────────────────────────────
+
+if (window.ethereum) {
+  window.ethereum.on('accountsChanged', function (accounts) {
+    if (accounts.length === 0) {
+      state.address = null
+      state.session = null
+      log('warn', 'MetaMask disconnected')
+    } else {
+      state.address = accounts[0].toLowerCase()
+      state.session = null
+      log('warn', 'Account changed — session cleared, sign in again')
+    }
+    if (state.timerInterval) clearInterval(state.timerInterval)
+    document.getElementById('sessionTimer').textContent = ''
+    updateUI()
+  })
+}
+
+updateUI()
+</script>
+</body>
+</html>
