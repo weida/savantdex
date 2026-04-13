@@ -18,14 +18,19 @@ import { loadPrivateKey } from '../sdk/keystore.mjs'
 import { registerToRegistry } from '../sdk/registry.mjs'
 import OpenAI from 'openai'
 
-const DEEPSEEK_KEY   = process.env.DEEPSEEK_API_KEY
-const ETHERSCAN_KEY  = process.env.ETHERSCAN_API_KEY
+// Load secrets early — supports age-encrypted secrets file (SECRETS_PATH + AGE_IDENTITY_PATH)
+// env vars take precedence for backward compat with direct-injection deployments
+let _secrets = {}
+try { _secrets = await loadSecrets() } catch { /* env-only mode */ }
+
+const DEEPSEEK_KEY   = process.env.DEEPSEEK_API_KEY  || _secrets.DEEPSEEK_API_KEY
+const ETHERSCAN_KEY  = process.env.ETHERSCAN_API_KEY || _secrets.ETHERSCAN_API_KEY
 const EXTERNAL_IP    = process.env.EXTERNAL_IP    || '127.0.0.1'
 const SIGNER_ADDRESS = process.env.SIGNER_ADDRESS
 const SIGNER_PORT    = Number(process.env.SIGNER_PORT || 17099)
 
-if (!DEEPSEEK_KEY)  { console.error('Missing DEEPSEEK_API_KEY');  process.exit(1) }
-if (!ETHERSCAN_KEY) { console.error('Missing ETHERSCAN_API_KEY'); process.exit(1) }
+if (!DEEPSEEK_KEY)  { console.error('Missing DEEPSEEK_API_KEY (set env var or add to secrets file)');  process.exit(1) }
+if (!ETHERSCAN_KEY) { console.error('Missing ETHERSCAN_API_KEY (set env var or add to secrets file)'); process.exit(1) }
 
 // --- Auth ---
 let workerAuth, ownerPrivateKey, registrySignerUrl
@@ -35,7 +40,8 @@ if (SIGNER_ADDRESS) {
   registrySignerUrl = `http://127.0.0.1:${SIGNER_PORT}`
 } else {
   console.warn('[tx-forensics] SIGNER_ADDRESS not set — falling back to local keystore (legacy mode)')
-  const { KEYSTORE_PASSWORD } = await loadSecrets()
+  const KEYSTORE_PASSWORD = _secrets.KEYSTORE_PASSWORD
+  if (!KEYSTORE_PASSWORD) throw new Error('KEYSTORE_PASSWORD missing from secrets file')
   ownerPrivateKey = await loadPrivateKey(KEYSTORE_PASSWORD)
   workerAuth = { privateKey: ownerPrivateKey }
 }

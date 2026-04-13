@@ -114,7 +114,7 @@ export class GatewayRequester {
    * @returns {Promise<object>}
    */
   async getCard(agentId) {
-    const res = await fetch(`${this.#registryUrl}/agents/${encodeURIComponent(agentId)}/card`)
+    const res = await fetch(`${this.#registryUrl}/agents/${encodeURIComponent(agentId)}`)
     if (!res.ok) throw new Error(`Agent not found: ${agentId}`)
     return res.json()
   }
@@ -260,6 +260,10 @@ export class GatewayRequester {
     } finally {
       this.#session = null
     }
+  }
+
+  async destroy() {
+    await this.revokeSession()
   }
 
   // ── Internal ─────────────────────────────────────────────────────────────────

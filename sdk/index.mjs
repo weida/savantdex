@@ -4,12 +4,18 @@
  */
 
 import { StreamrClient, StreamPermission } from '@streamr/sdk'
+import { randomBytes } from 'crypto'
 
 export class SavantDex {
   #client
   #streamId
   #agentId
   #address
+  #trustedTaskPublishers
+  #pendingResults
+  #resultSubscription
+  #seenTaskIds
+  #seenResultTaskIds
 
   /**
    * @param {object} config
@@ -22,6 +28,18 @@ export class SavantDex {
     if (!privateKey && !identity) throw new Error('[SavantDex] privateKey or identity is required')
     this.#agentId  = agentId
     this._signerMode = !privateKey  // true when identity (RemoteSignerIdentity) is used
+    this.#pendingResults = new Map()
+    this.#resultSubscription = null
+    this.#seenTaskIds = new Map()
+    this.#seenResultTaskIds = new Map()
+    this.#trustedTaskPublishers = new Set(
+      ((network.trustedTaskPublishers?.join(','))
+        || (typeof process !== 'undefined' ? process.env.TRUSTED_GATEWAY_ADDRESSES : '')
+        || '')
+        .split(',')
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean)
+    )
     this.#client = new StreamrClient({
       auth: privateKey ? { privateKey } : { identity },
       network: {
@@ -62,8 +80,8 @@ export class SavantDex {
    *   explaining how to pre-create it using setup mode.
    *
    *   Pre-create the stream once:
-   *     KEYSTORE_PATH=./setup.keystore.json KEYSTORE_PASSWORD=... \
-   *       node -e "import('./sdk/index.mjs').then(m => new m.SavantDex({ privateKey, agentId }).setup())"
+   *     KEYSTORE_PATH=./setup.keystore.json \
+   *       node -e "import('./sdk/index.mjs').then(m => new m.SavantDex({ privateKey, agentId }).register())"
    *   Or keep calling register() with the setup key on first run.
    */
   async register() {
@@ -118,7 +136,7 @@ export class SavantDex {
    * @returns {string} taskId
    */
   async sendTask(targetStreamId, { type, input, taskId: providedTaskId }) {
-    const taskId = providedTaskId || `task-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const taskId = providedTaskId || `task-${randomBytes(16).toString('hex')}`
     const replyStreamId = await this.getStreamId()
 
     await this.#client.publish(targetStreamId, {
@@ -141,18 +159,39 @@ export class SavantDex {
    */
   async onTask(handler) {
     const streamId = await this.getStreamId()
-    await this.#client.subscribe(streamId, async (msg) => {
+    await this.#client.subscribe(streamId, async (content, metadata) => {
+      const msg = normalizeIncomingMessage(content, metadata)
       // Outer catch: prevent ANY exception from escaping the subscribe callback.
       // An uncaught async exception here reaches the Streamr SDK's internal
       // unhandledRejection handler, which tears down the entire network stack
       // and stops the worker from receiving future tasks.
       try {
         if (!msg.taskId) return
+        const publisherId = getPublisherId(msg)
+        pruneSeenTaskIds(this.#seenTaskIds)
+        if (this.#seenTaskIds.has(msg.taskId)) {
+          console.warn(`[SavantDex] Dropped replayed task ${msg.taskId}`)
+          return
+        }
+        if (this.#trustedTaskPublishers.size > 0 && !publisherId) {
+          console.warn(`[SavantDex] Dropped task ${msg.taskId}: publisher unavailable`)
+          return
+        }
+        if (this.#trustedTaskPublishers.size > 0 && !this.#trustedTaskPublishers.has(publisherId)) {
+          console.warn(`[SavantDex] Dropped task ${msg.taskId}: untrusted publisher ${publisherId}`)
+          return
+        }
+        this.#seenTaskIds.set(msg.taskId, Date.now())
 
         console.log(`[SavantDex] Task received: ${msg.taskId} (${msg.type})`)
 
         const reply = async (output) => {
           if (!msg.replyTo) return
+          const replyOwner = getStreamOwner(msg.replyTo)
+          if (!replyOwner || (publisherId && replyOwner !== publisherId)) {
+            console.warn(`[SavantDex] Dropped reply for ${msg.taskId}: invalid replyTo ${msg.replyTo}`)
+            return
+          }
           try {
             await this.#client.publish(msg.replyTo, {
               taskId: msg.taskId,
@@ -192,21 +231,83 @@ export class SavantDex {
    * @param {string} taskId
    * @param {number} timeout - ms
    */
-  async waitForResult(taskId, timeout = 30000) {
-    const streamId = await this.getStreamId()
+  async waitForResult(taskId, timeout = 30000, expectedPublisherId = null) {
+    const expected = expectedPublisherId ? expectedPublisherId.toLowerCase() : null
+    await this.#ensureResultSubscription()
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error(`Timeout waiting for ${taskId}`)), timeout)
-
-      this.#client.subscribe(streamId, (msg) => {
-        if (msg.taskId === taskId && msg.type === 'result') {
-          clearTimeout(timer)
-          resolve(msg.output)
-        }
-      }).catch(reject)
+      if (this.#pendingResults.has(taskId)) {
+        reject(new Error(`Duplicate waitForResult for ${taskId}`))
+        return
+      }
+      const timer = setTimeout(() => {
+        this.#pendingResults.delete(taskId)
+        reject(new Error(`Timeout waiting for ${taskId}`))
+      }, timeout)
+      this.#pendingResults.set(taskId, { resolve, reject, timer, expected })
     })
   }
 
   async destroy() {
+    if (this.#resultSubscription?.unsubscribe) {
+      await this.#resultSubscription.unsubscribe()
+    }
     await this.#client.destroy()
+  }
+
+  async #ensureResultSubscription() {
+    if (this.#resultSubscription) return
+    const streamId = await this.getStreamId()
+    this.#resultSubscription = await this.#client.subscribe(streamId, async (content, metadata) => {
+      const msg = normalizeIncomingMessage(content, metadata)
+      if (msg?.type !== 'result' || !msg?.taskId) return
+      pruneSeenTaskIds(this.#seenResultTaskIds)
+      if (this.#seenResultTaskIds.has(msg.taskId)) return
+      const pending = this.#pendingResults.get(msg.taskId)
+      if (!pending) return
+      const publisherId = getPublisherId(msg)
+      if (pending.expected && publisherId !== pending.expected) return
+      clearTimeout(pending.timer)
+      this.#pendingResults.delete(msg.taskId)
+      this.#seenResultTaskIds.set(msg.taskId, Date.now())
+      pending.resolve(msg.output)
+    })
+  }
+}
+
+function getPublisherId(msg) {
+  if (msg?.publisherId) return String(msg.publisherId).toLowerCase()
+  if (typeof msg?.getPublisherId === 'function') {
+    const publisherId = msg.getPublisherId()
+    return typeof publisherId === 'string' ? publisherId.toLowerCase() : null
+  }
+  if (msg?.messageId?.publisherId) return String(msg.messageId.publisherId).toLowerCase()
+  return null
+}
+
+function normalizeIncomingMessage(content, metadata) {
+  const normalized = (content && typeof content === 'object') ? { ...content } : { value: content }
+  if (metadata && typeof metadata === 'object') {
+    if (metadata.publisherId && !normalized.publisherId) {
+      normalized.publisherId = metadata.publisherId
+    }
+    if (metadata.messageId && !normalized.messageId) {
+      normalized.messageId = metadata.messageId
+    }
+    if (typeof metadata.getPublisherId === 'function' && typeof normalized.getPublisherId !== 'function') {
+      normalized.getPublisherId = metadata.getPublisherId.bind(metadata)
+    }
+  }
+  return normalized
+}
+
+function getStreamOwner(streamId) {
+  if (typeof streamId !== 'string' || !streamId.includes('/')) return null
+  return streamId.split('/')[0].toLowerCase()
+}
+
+function pruneSeenTaskIds(seenTaskIds, now = Date.now()) {
+  const cutoff = now - 10 * 60 * 1000
+  for (const [taskId, seenAt] of seenTaskIds) {
+    if (seenAt < cutoff) seenTaskIds.delete(taskId)
   }
 }

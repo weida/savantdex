@@ -138,7 +138,7 @@ export class SavantDexRequester {
 
     // status: running → completed | failed
     try {
-      const output = await this.#agent.waitForResult(taskId, timeout)
+      const output = await this.#agent.waitForResult(taskId, timeout, streamId.split('/')[0])
       return {
         taskId,
         status:  'completed',

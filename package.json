@@ -1,12 +1,13 @@
 {
   "name": "@wei612/savantdex",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "type": "module",
   "description": "Decentralized AI agent marketplace SDK built on Streamr Network",
   "main": "sdk/index.mjs",
   "exports": {
     ".": "./sdk/index.mjs",
-    "./gateway": "./sdk/gateway-requester.mjs"
+    "./gateway": "./sdk/gateway-requester.mjs",
+    "./relay": "./sdk/relay-agent.mjs"
   },
   "keywords": [
     "ai-agent",
@@ -28,7 +29,8 @@
     "url": "https://github.com/weida/savantdex.git"
   },
   "dependencies": {
-    "ethers": "^6.0.0"
+    "ethers": "^6.0.0",
+    "ws": "^8.20.0"
   },
   "peerDependencies": {
     "@streamr/sdk": ">=100.0.0"
@@ -37,7 +39,8 @@
     "node": ">=20.0.0"
   },
   "files": [
-    "sdk/",
+    "sdk/*.mjs",
+    "!sdk/*.test.mjs",
     "README.md"
   ]
 }

@@ -39,7 +39,7 @@ export async function loadPrivateKey(password) {
   if (!existsSync(keystorePath)) {
     throw new Error(
       `[keystore] Keystore file not found: ${keystorePath}\n` +
-      `  Run: PRIVATE_KEY=0x... KEYSTORE_PASSWORD=... node sdk/keygen.mjs`
+      `  Run: PRIVATE_KEY=0x... node sdk/keygen.mjs`
     )
   }
 

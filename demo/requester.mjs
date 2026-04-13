@@ -13,14 +13,14 @@ const PRIVATE_KEY = process.env.PRIVATE_KEY
 if (!PRIVATE_KEY) { console.error('Missing PRIVATE_KEY'); process.exit(1) }
 
 // Worker's stream ID (in production, looked up via registry)
-const WORKER_STREAM = '0xfa59a08c450efe2b925eabb5398d75205217aee1/agentmesh/summarizer-v1'
+const WORKER_STREAM = process.env.WORKER_STREAM || '0xYOUR_ADDRESS/savantdex/YOUR_AGENT_ID'
 
 const agent = new AgentMesh({
   privateKey: PRIVATE_KEY,
   agentId: 'requester-demo',
   network: {
     websocketPort: 32201,
-    externalIp: '39.101.135.96'
+    externalIp: process.env.EXTERNAL_IP || '127.0.0.1'
   }
 })
 

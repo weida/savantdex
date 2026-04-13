@@ -22,15 +22,18 @@ import { Identity, SignatureType } from '@streamr/sdk'
 export class RemoteSignerIdentity extends Identity {
   _address
   _signerUrl
+  _signerToken
 
   /**
    * @param {string} address   Ethereum address of the signer (0x-prefixed)
    * @param {number} port      Port of the signer server (default: 17099)
+   * @param {string|null} signerToken Shared bearer token for the local signer
    */
-  constructor(address, port = 17099) {
+  constructor(address, port = 17099, signerToken = process.env.SIGNER_TOKEN || null) {
     super()
-    this._address   = address.toLowerCase()
+    this._address = address.toLowerCase()
     this._signerUrl = `http://127.0.0.1:${port}/sign-message`
+    this._signerToken = signerToken
   }
 
   getUserId() {
@@ -46,10 +49,16 @@ export class RemoteSignerIdentity extends Identity {
   }
 
   async createMessageSignature(payload) {
+    if (!this._signerToken) {
+      throw new Error('RemoteSignerIdentity requires SIGNER_TOKEN')
+    }
     const res = await fetch(this._signerUrl, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ payload: Buffer.from(payload).toString('hex') }),
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Signer-Token': this._signerToken
+      },
+      body: JSON.stringify({ payload: Buffer.from(payload).toString('hex') }),
     })
 
     if (!res.ok) {

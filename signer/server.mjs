@@ -32,14 +32,17 @@
  */
 
 import http from 'node:http'
+import { timingSafeEqual } from 'node:crypto'
 import { Wallet } from 'ethers'
 import { loadSecrets } from '../sdk/secrets.mjs'
 import { loadPrivateKey } from '../sdk/keystore.mjs'
 
 const PORT  = Number(process.env.SIGNER_PORT || 17099)
 const LABEL = process.env.SIGNER_LABEL || process.env.KEYSTORE_LABEL || 'signer'
+const MAX_BODY_BYTES = 64 * 1024
 
-const { KEYSTORE_PASSWORD } = await loadSecrets()
+const { KEYSTORE_PASSWORD, SIGNER_TOKEN } = await loadSecrets()
+if (!SIGNER_TOKEN) throw new Error('[signer] Missing required secret: SIGNER_TOKEN')
 const privateKey = await loadPrivateKey(KEYSTORE_PASSWORD)
 const wallet = new Wallet(privateKey)
 
@@ -52,13 +55,39 @@ let reqCount = 0
 
 async function readBody(req) {
   let body = ''
-  for await (const chunk of req) body += chunk
+  let total = 0
+  for await (const chunk of req) {
+    total += chunk.length
+    if (total > MAX_BODY_BYTES) {
+      const err = new Error('body too large')
+      err.code = 'BODY_TOO_LARGE'
+      throw err
+    }
+    body += chunk
+  }
   return JSON.parse(body)
 }
 
 function respond(res, status, data) {
   res.writeHead(status, { 'Content-Type': 'application/json' })
   res.end(JSON.stringify(data))
+}
+
+const SIGNER_TOKEN_BUF = Buffer.from(SIGNER_TOKEN)
+const SIGNER_TOKEN_DUMMY = Buffer.alloc(SIGNER_TOKEN_BUF.length)
+
+function isAuthorized(req) {
+  const presented = req.headers['x-signer-token']
+  if (typeof presented !== 'string') {
+    timingSafeEqual(SIGNER_TOKEN_DUMMY, SIGNER_TOKEN_DUMMY)
+    return false
+  }
+  const actual = Buffer.from(presented)
+  if (actual.length !== SIGNER_TOKEN_BUF.length) {
+    timingSafeEqual(SIGNER_TOKEN_DUMMY, SIGNER_TOKEN_DUMMY)
+    return false
+  }
+  return timingSafeEqual(actual, SIGNER_TOKEN_BUF)
 }
 
 // ── HTTP server ───────────────────────────────────────────────────────────────
@@ -72,10 +101,17 @@ const server = http.createServer(async (req, res) => {
     return respond(res, 405, { error: 'method not allowed' })
   }
 
+  if (!isAuthorized(req)) {
+    return respond(res, 401, { error: 'unauthorized' })
+  }
+
   let body
   try {
     body = await readBody(req)
-  } catch {
+  } catch (err) {
+    if (err.code === 'BODY_TOO_LARGE') {
+      return respond(res, 413, { error: 'body too large' })
+    }
     return respond(res, 400, { error: 'invalid JSON' })
   }
 

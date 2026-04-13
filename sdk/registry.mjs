@@ -34,6 +34,7 @@ import { Wallet } from 'ethers'
  * @param {string}   opts.registryUrl
  * @param {string[]} opts.capabilities
  * @param {string}   [opts.signerUrl]     Base URL of signer server (alternative to ownerPrivateKey)
+ * @param {string}   [opts.signerToken]   Shared signer auth token (defaults to SIGNER_TOKEN env)
  * @param {string}   [opts.description]
  * @param {string}   [opts.name]
  * @param {string}   [opts.category]
@@ -52,7 +53,8 @@ import { Wallet } from 'ethers'
 export async function registerToRegistry(agent, ownerPrivateKey, opts) {
   const { registryUrl, capabilities, signerUrl, description = '',
           name, category, exampleInput, exampleOutput, inputSchema, docsUrl,
-          taskType, outputSchema, protocolVersion, supportsAsync, expectedLatencyMs, authType, pricingModel } = opts
+          taskType, outputSchema, protocolVersion, supportsAsync, expectedLatencyMs, authType, pricingModel,
+          signerToken = process.env.SIGNER_TOKEN || null } = opts
 
   if (!ownerPrivateKey && !signerUrl) {
     throw new Error('[registry] ownerPrivateKey or opts.signerUrl is required')
@@ -74,10 +76,14 @@ export async function registerToRegistry(agent, ownerPrivateKey, opts) {
   } else {
     // Delegate signing to signer server via structured endpoint
     // The signer constructs the canonical message internally; we only send fields.
+    if (!signerToken) throw new Error('[registry] signerToken or SIGNER_TOKEN is required when using signerUrl')
     const res = await fetch(`${signerUrl}/authorize-runtime`, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ agentId, streamId, runtimeAddress, timestamp }),
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Signer-Token': signerToken,
+      },
+      body: JSON.stringify({ agentId, streamId, runtimeAddress, timestamp }),
     })
     if (!res.ok) {
       const text = await res.text()

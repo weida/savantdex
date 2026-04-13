@@ -7,6 +7,7 @@
 
 import { describe, it, mock, beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
+import { randomBytes } from 'node:crypto'
 
 // ── Mock @streamr/sdk ──────────────────────────────────────────────────────
 const MOCK_ADDRESS = '0xfa59a08c450efe2b925eabb5398d75205217aee1'
@@ -79,12 +80,12 @@ describe('SavantDex stream ID format', () => {
 
 describe('taskId generation format', () => {
   it('taskId starts with "task-" prefix', () => {
-    const taskId = `task-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-    assert.match(taskId, /^task-\d+-[a-z0-9]{6}$/)
+    const taskId = `task-${'a'.repeat(32)}`
+    assert.match(taskId, /^task-[a-f0-9]{32}$/)
   })
 
   it('two consecutive taskIds are different', () => {
-    const make = () => `task-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const make = () => `task-${randomBytes(16).toString('hex')}`
     assert.notEqual(make(), make())
   })
 })
