@@ -1,0 +1,6 @@
+node_modules/
+payment.db
+payment.db-shm
+payment.db-wal
+metrics.json
+*.db

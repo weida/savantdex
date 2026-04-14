@@ -1,0 +1,12 @@
+{
+  "name": "savantdex-registry",
+  "version": "0.3.0",
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "dev": "node --watch server.mjs"
+  },
+  "dependencies": {
+    "ethers": "^6.16.0"
+  }
+}
