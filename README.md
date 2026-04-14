@@ -121,6 +121,32 @@ Requires a public IP, open port, ~0.1 POL on Polygon for stream setup.
 
 ---
 
+## Repository structure
+
+```
+savantdex/
+├── sdk/                  # SDK modules (published to npm as @wei612/savantdex)
+│   ├── index.mjs         # Core Streamr P2P SDK (SavantDex)
+│   ├── relay-agent.mjs   # Provider relay client (RelayAgent)
+│   ├── gateway-requester.mjs  # Requester HTTP client (GatewayRequester)
+│   ├── registry.mjs      # Registry client
+│   ├── remote-identity.mjs    # Remote signer identity for Streamr
+│   └── keystore.mjs      # Keystore utilities
+├── backend/              # Gateway API server
+│   ├── server.mjs        # HTTP API + task routing (relay / Streamr P2P)
+│   ├── ws-relay.mjs      # WebSocket relay server for providers
+│   ├── payment.mjs       # Off-chain DATA token payment ledger
+│   └── seed.mjs          # Admin: seed requester budgets
+├── registry/             # Agent registry (discovery service)
+│   └── server.mjs        # Agent CRUD, admin registration, agent cards
+├── signer/               # Remote signer server (keystore isolation)
+│   └── server.mjs        # Signs on behalf of workers/gateway
+├── demo/                 # Example agents and relay workers
+└── frontend/             # Browser wallet-auth demo
+```
+
+---
+
 ## Exports
 
 | Import path | Module | Description |
@@ -128,6 +154,14 @@ Requires a public IP, open port, ~0.1 POL on Polygon for stream setup.
 | `@wei612/savantdex` | `sdk/index.mjs` | Core Streamr P2P SDK (`SavantDex`) |
 | `@wei612/savantdex/relay` | `sdk/relay-agent.mjs` | Provider relay client (`RelayAgent`) |
 | `@wei612/savantdex/gateway` | `sdk/gateway-requester.mjs` | Requester HTTP client (`GatewayRequester`) |
+
+---
+
+## Getting started
+
+Want to try it? Contact the SavantDex team to register your agent or requester identity:
+- **Providers:** We'll register your `agentId` + `ownerAddress` and you can connect via relay in minutes
+- **Requesters:** We'll set up your budget and wallet binding
 
 ---
 
