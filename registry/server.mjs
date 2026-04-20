@@ -52,10 +52,14 @@
  *     status, registeredAt, updatedAt }
  */
 
+import process from 'process'
+process.umask(0o077)
+
 import { createServer } from 'http'
 import { readFileSync, writeFileSync, existsSync } from 'fs'
 import { timingSafeEqual } from 'crypto'
 import { verifyMessage } from 'ethers'
+import { createPowChallenge, verifyPow } from '../sdk/pow.mjs'
 
 const PORT          = process.env.PORT || 3000
 const DB_FILE       = process.env.DB_FILE || './agents.json'
@@ -419,6 +423,90 @@ function deleteAgent(db, agentId, headers) {
  * No wallet signature required — admin key is the auth.
  * Generates a synthetic streamId (relay://{agentId}) since relay agents don't use Streamr P2P.
  */
+// ── Faucet: self-service agent registration ──────────────────────────────────
+
+const AGENT_ID_RE = /^[a-z0-9][a-z0-9._-]{2,48}[a-z0-9]$/
+const REG_SIG_WINDOW_MS = 5 * 60 * 1000
+
+function selfRegisterAgent(db, body) {
+  const {
+    agentId, ownerAddress, timestamp, signature, challengeId, nonce,
+    capabilities = [],
+    description, name, category, docsUrl,
+    taskType, inputSchema, outputSchema, exampleInput, exampleOutput,
+    protocolVersion, supportsAsync, expectedLatencyMs, pricingModel,
+  } = body
+
+  // Required fields
+  if (!agentId) return { status: 400, data: { error: 'agentId is required' } }
+  if (!ownerAddress) return { status: 400, data: { error: 'ownerAddress is required' } }
+  if (!timestamp || !signature || !challengeId || !nonce)
+    return { status: 400, data: { error: 'timestamp, signature, challengeId, nonce required' } }
+  if (!Array.isArray(capabilities) || capabilities.length === 0)
+    return { status: 400, data: { error: 'capabilities must be a non-empty array' } }
+
+  // agentId format
+  if (!AGENT_ID_RE.test(agentId))
+    return { status: 400, data: { error: 'Invalid agentId format (lowercase alphanumeric, 4-50 chars)' } }
+
+  // Timestamp window
+  if (Math.abs(Date.now() - timestamp) > REG_SIG_WINDOW_MS)
+    return { status: 400, data: { error: 'Timestamp out of range (±5 min)' } }
+
+  // Verify PoW
+  try { verifyPow(challengeId, nonce) } catch (e) {
+    return { status: 400, data: { error: e.message } }
+  }
+
+  // Verify wallet signature
+  const message = `savantdex-register-agent:${agentId}:${ownerAddress.toLowerCase()}:${timestamp}`
+  let recovered
+  try { recovered = verifyMessage(message, signature) } catch {
+    return { status: 400, data: { error: 'Invalid signature format' } }
+  }
+  if (recovered.toLowerCase() !== ownerAddress.toLowerCase())
+    return { status: 401, data: { error: 'Signature does not match ownerAddress' } }
+
+  // Ownership check for re-registration
+  const existing = db[agentId]
+  const existingOwner = existing?.ownerAddress || existing?.owner
+  if (existing && existingOwner && existingOwner.toLowerCase() !== ownerAddress.toLowerCase())
+    return { status: 403, data: { error: `Cannot overwrite: different owner` } }
+
+  const streamId = `relay://${agentId}`
+
+  const record = {
+    agentId,
+    streamId,
+    capabilities: capabilities.map(c => c.toLowerCase()),
+    description:    description || '',
+    ownerAddress:   ownerAddress.toLowerCase(),
+    runtimeAddress: null,
+    status:         'active',
+    authVersion:    'self-registered',
+    transport:      'relay',
+    registeredAt:   existing?.registeredAt || new Date().toISOString(),
+    updatedAt:      new Date().toISOString(),
+  }
+
+  if (name !== undefined)          record.name = String(name).slice(0, 100)
+  if (category !== undefined)      record.category = String(category).slice(0, 50).toLowerCase()
+  if (docsUrl !== undefined)       record.docsUrl = String(docsUrl).slice(0, 500)
+  if (exampleInput !== undefined && typeof exampleInput === 'object')   record.exampleInput = exampleInput
+  if (exampleOutput !== undefined && typeof exampleOutput === 'object') record.exampleOutput = exampleOutput
+  if (Array.isArray(inputSchema))  record.inputSchema = inputSchema
+  if (taskType !== undefined)                                           record.taskType = String(taskType).slice(0, 100)
+  if (Array.isArray(outputSchema))                                      record.outputSchema = outputSchema
+  if (protocolVersion !== undefined)                                    record.protocolVersion = String(protocolVersion).slice(0, 20)
+  if (supportsAsync !== undefined)                                      record.supportsAsync = Boolean(supportsAsync)
+  if (expectedLatencyMs !== undefined && Number.isFinite(Number(expectedLatencyMs))) record.expectedLatencyMs = Number(expectedLatencyMs)
+  if (pricingModel !== undefined && typeof pricingModel === 'object')  record.pricingModel = pricingModel
+
+  db[agentId] = record
+  saveDB(db)
+  return { status: 200, data: { ok: true, agentId, streamId, ownerAddress: record.ownerAddress, transport: 'relay' } }
+}
+
 function adminRegisterAgent(db, body) {
   const {
     agentId, ownerAddress, capabilities = [],
@@ -525,6 +613,14 @@ const server = createServer(async (req, res) => {
         result = adminDeleteAgent(db, agentId)
       }
 
+    // ── Self-service provider registration ────────────────────────────
+    } else if (req.method === 'POST' && path === '/register/challenge') {
+      result = { status: 200, data: createPowChallenge() }
+
+    } else if (req.method === 'POST' && path === '/register/agent') {
+      const body = await parseBody(req)
+      result = selfRegisterAgent(db, body)
+
     // ── Public routes ──────────────────────────────────────────────────────
     } else if (req.method === 'POST' && path === '/agents/register') {
       const body = await parseBody(req)
@@ -591,13 +687,17 @@ function send(res, status, data) {
   const isWrite = r && (r.method === 'POST' || r.method === 'DELETE')
   res.writeHead(status, {
     'Content-Type': 'application/json',
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'DENY',
     ...corsHeaders(r || { headers: {} }, isWrite),
   })
   res.end(JSON.stringify(data))
 }
 
-server.listen(PORT, () => {
+server.listen(PORT, '127.0.0.1', () => {
   console.log(`SavantDex Registry v0.6 running on port ${PORT}`)
+  console.log(`  POST   /register/challenge           - PoW challenge for self-registration`)
+  console.log(`  POST   /register/agent               - Self-register relay provider (wallet sig + PoW)`)
   console.log(`  POST   /agents/register              - Register with owner/runtime signature (v0.4) or legacy`)
   console.log(`  POST   /admin/agents/register        - Admin-assisted registration (relay providers)`)
   console.log(`  DELETE /admin/agents/:agentId         - Admin delete (no owner signature)`)

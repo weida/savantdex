@@ -281,7 +281,7 @@ async function validateAuth(msg) {
   const canonical = `savantdex-relay:${agentId}:${ownerAddress.toLowerCase()}:${timestamp}:${nonce}`
   let recovered
   try {
-    recovered = ethers.utils.verifyMessage(canonical, signature)
+    recovered = ethers.verifyMessage(canonical, signature)
   } catch {
     return { ok: false, error: 'Invalid signature', code: CLOSE_SIGNATURE_MISMATCH }
   }

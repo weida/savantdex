@@ -8,7 +8,6 @@
     "start": "node server.mjs"
   },
   "dependencies": {
-    "@streamr/sdk": "^100.0.0",
     "better-sqlite3": "^12.8.0",
     "ws": "^8.20.0"
   },

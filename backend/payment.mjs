@@ -15,7 +15,7 @@
  * All monetary values are stored and passed as strings (DATA base units, 18 decimals).
  * agreementVersion = "1" for Phase A/B tasks (no evidence gate).
  * agreementVersion = "2" for Phase C+ tasks (evidence gate enforced).
- * Schema user_version = 6 (reservation migration applied).
+ * Schema user_version = 7 (faucetClaimedAt column added to RequesterBudget).
  *
  * resultHash canonicalization: SHA-256 of JSON.stringify(sortKeysDeep(result)).
  * proofType Phase C initial value: "gateway-observed".
@@ -142,6 +142,8 @@ function runMigrations() {
   if (v < 4) { applyMigrationV4(); v = 4 }
   if (v < 5) { applyMigrationV5(); v = 5 }   // eslint-disable-line no-unused-vars
   if (v < 6) { applyMigrationV6(); v = 6 }
+  if (v < 7) { applyMigrationV7(); v = 7 }     // faucetClaimedAt column
+  if (v < 8) { applyMigrationV8(); v = 8 }     // relax DeliveryReceipt/TaskAgreementProof proofType CHECK
 }
 
 function applyMigrationV1() {
@@ -349,6 +351,52 @@ function applyMigrationV6() {
       db.exec(`ALTER TABLE InvocationRecord ADD COLUMN reservedAmountBaseUnits TEXT NOT NULL DEFAULT '0';`)
     }
     db.pragma('user_version = 6')
+  })()
+}
+
+function applyMigrationV7() {
+  db.transaction(() => {
+    const cols = db.prepare(`PRAGMA table_info(RequesterBudget)`).all().map(r => r.name)
+    if (!cols.includes('faucetClaimedAt')) {
+      db.exec(`ALTER TABLE RequesterBudget ADD COLUMN faucetClaimedAt TEXT;`)
+    }
+    db.pragma('user_version = 7')
+  })()
+}
+
+// Phase-1 receipt signing introduced a new proofType 'gateway-signed-v1' that
+// the V2 CHECK constraint rejects silently under INSERT OR IGNORE. Rebuild the
+// two proof tables without the enum constraint — proofType is a free-form
+// string from now on, validated at the application layer instead.
+function applyMigrationV8() {
+  db.transaction(() => {
+    db.exec(`
+      CREATE TABLE DeliveryReceipt_new (
+        taskId               TEXT PRIMARY KEY,
+        agreementHash        TEXT NOT NULL,
+        providerAgentId      TEXT NOT NULL,
+        providerOwnerAddress TEXT NOT NULL,
+        resultHash           TEXT NOT NULL,
+        proofType            TEXT NOT NULL,
+        proofPayloadJson     TEXT NOT NULL,
+        createdAt            TEXT NOT NULL
+      );
+      INSERT INTO DeliveryReceipt_new SELECT * FROM DeliveryReceipt;
+      DROP TABLE DeliveryReceipt;
+      ALTER TABLE DeliveryReceipt_new RENAME TO DeliveryReceipt;
+
+      CREATE TABLE TaskAgreementProof_new (
+        taskId           TEXT PRIMARY KEY,
+        agreementHash    TEXT NOT NULL,
+        proofType        TEXT NOT NULL,
+        proofPayloadJson TEXT NOT NULL,
+        createdAt        TEXT NOT NULL
+      );
+      INSERT INTO TaskAgreementProof_new SELECT * FROM TaskAgreementProof;
+      DROP TABLE TaskAgreementProof;
+      ALTER TABLE TaskAgreementProof_new RENAME TO TaskAgreementProof;
+    `)
+    db.pragma('user_version = 8')
   })()
 }
 
@@ -983,32 +1031,110 @@ export function chargeCompleted(taskId) {
 
 // ── Phase C: delivery receipt ─────────────────────────────────────────────────
 
-export function writeDeliveryReceipt({ taskId, result, gatewayAddress = null }) {
-  const database = getDb()
-  const agreement  = database.prepare(`SELECT agreementHash, providerAgentId, providerOwnerAddress FROM TaskAgreement    WHERE taskId = ?`).get(taskId)
-  const invocation = database.prepare(`SELECT providerAgentId, providerOwnerAddress               FROM InvocationRecord WHERE taskId = ?`).get(taskId)
-  if (!agreement || !invocation) return
+/**
+ * Phase-1 receipt write. Accepts the canonical payload directly — callers are
+ * responsible for building it via `buildReceiptPayload()` in receipt.mjs and
+ * (optionally) signing via `signReceiptPayload()`. This keeps a single source
+ * of truth for the canonical shape and decouples receipt persistence from the
+ * payment ledger: receipts are written for every completed task, regardless
+ * of whether a billing agreement exists.
+ */
+export function writeDeliveryReceipt({
+  payload,
+  signedPayload = null, signature = null, signerAddress = null,
+  gatewayAddress = null,
+}) {
+  if (!payload || !payload.taskId || !payload.resultHash) return
 
-  const resultHash = computeResultHash(result)
-  const now = nowIso()
-  const proofPayloadJson = JSON.stringify({
-    proofType:      'gateway-observed',
-    gatewayAddress: gatewayAddress || 'unknown',
-    observedAt:     now,
-    resultHash,
-    agreementHash:  agreement.agreementHash,
-  })
+  const isSigned  = signedPayload && signature && signerAddress
+  const proofType = isSigned ? 'gateway-signed-v1' : 'gateway-observed'
+  const now       = nowIso()
 
-  database.prepare(`
+  const proofPayload = isSigned
+    ? {
+        proofType,
+        gatewayAddress: signerAddress,
+        observedAt:     now,
+        signedPayload,
+        signature,
+      }
+    : {
+        proofType,
+        gatewayAddress: gatewayAddress || 'unknown',
+        observedAt:     now,
+        resultHash:     payload.resultHash,
+        agreementHash:  payload.agreementHash || '',
+      }
+
+  getDb().prepare(`
     INSERT OR IGNORE INTO DeliveryReceipt
       (taskId, agreementHash, providerAgentId, providerOwnerAddress,
        resultHash, proofType, proofPayloadJson, createdAt)
-    VALUES (?, ?, ?, ?, ?, 'gateway-observed', ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
-    taskId, agreement.agreementHash,
-    invocation.providerAgentId, invocation.providerOwnerAddress,
-    resultHash, proofPayloadJson, now
+    payload.taskId,
+    payload.agreementHash        || '',
+    payload.providerAgentId      || '',
+    payload.providerOwnerAddress || '',
+    payload.resultHash,
+    proofType, JSON.stringify(proofPayload), now
   )
+}
+
+/**
+ * Fetch a delivery receipt by taskId for public verification.
+ * Returns { taskId, proofType, payload, signature, signerAddress, createdAt } or null.
+ */
+export function getDeliveryReceipt(taskId) {
+  const database = getDb()
+  const row = database.prepare(`
+    SELECT taskId, agreementHash, providerAgentId, providerOwnerAddress,
+           resultHash, proofType, proofPayloadJson, createdAt
+      FROM DeliveryReceipt WHERE taskId = ?
+  `).get(taskId)
+  if (!row) return null
+
+  let proof
+  try { proof = JSON.parse(row.proofPayloadJson) } catch { proof = {} }
+
+  return {
+    taskId:     row.taskId,
+    proofType:  row.proofType,
+    createdAt:  row.createdAt,
+    resultHash: row.resultHash,
+    providerAgentId:      row.providerAgentId,
+    providerOwnerAddress: row.providerOwnerAddress,
+    agreementHash:        row.agreementHash,
+    // For signed-v1 only: the exact payload that was signed + signature + signer
+    payload:       proof.signedPayload || null,
+    signature:     proof.signature     || null,
+    signerAddress: isSignedProofType(row.proofType) ? proof.gatewayAddress : null,
+    // Legacy fields kept for callers that saw the old shape
+    proofPayload:  proof,
+  }
+}
+
+function isSignedProofType(t) {
+  return typeof t === 'string' && t.startsWith('gateway-signed-')
+}
+
+/**
+ * Look up the agreement row for a task, if one was written (i.e. the task
+ * went through the payment-tracked path). Returns null for tasks that bypassed
+ * `writeSubmitted` — e.g. admin / dev-mode invocations. Callers should treat
+ * `agreementHash` as optional in the receipt payload when this returns null.
+ *
+ * Kept deliberately minimal — the canonical payload builder lives in
+ * receipt.mjs (`buildReceiptPayload`) as the single source of truth. This
+ * helper only returns raw DB fields.
+ */
+export function getTaskAgreementForReceipt(taskId) {
+  const database = getDb()
+  const agr = database.prepare(
+    `SELECT agreementHash, providerAgentId, providerOwnerAddress, requesterAgentId, taskType
+       FROM TaskAgreement WHERE taskId = ?`
+  ).get(taskId)
+  return agr || null
 }
 
 // ── Funding record lifecycle ──────────────────────────────────────────────────
@@ -1317,8 +1443,8 @@ export function seedRequester({
       INSERT OR REPLACE INTO RequesterBudget
         (requesterAgentId, ownerAddress, currency,
          remainingBaseUnits, reservedBaseUnits, maxPerTaskBaseUnits, dailyLimitBaseUnits,
-         dailySpentBaseUnits, dailySpentWindowStart, updatedAt)
-      VALUES (?, ?, ?, ?, '0', ?, ?, '0', ?, ?)
+         dailySpentBaseUnits, dailySpentWindowStart, faucetClaimedAt, updatedAt)
+      VALUES (?, ?, ?, ?, '0', ?, ?, '0', ?, NULL, ?)
     `).run(requesterAgentId, ownerAddress, currency,
       remainingBaseUnits, maxPerTaskBaseUnits, dailyLimitBaseUnits,
       utcDayStart(now), now)
@@ -1332,4 +1458,103 @@ export function seedRequester({
       `).run(randomUUID(), requesterAgentId, remainingBaseUnits, currency, now)
     }
   })()
+}
+
+// ── Self-service registration ────────────────────────────────────────────────
+
+export function selfRegisterRequester({ requesterAgentId, ownerAddress }) {
+  const database = getDb()
+  const normalized = normalizeAddress(ownerAddress)
+
+  database.transaction(() => {
+    // Check: agentId already taken?
+    const existing = database.prepare(
+      `SELECT requesterAgentId FROM RequesterIdentity WHERE requesterAgentId = ?`
+    ).get(requesterAgentId)
+    if (existing) {
+      const e = new Error(`requesterAgentId already registered: ${requesterAgentId}`)
+      e.code = 'AGENT_ID_TAKEN'; throw e
+    }
+
+    // Check: wallet already registered?
+    const byWallet = database.prepare(
+      `SELECT requesterAgentId FROM RequesterIdentity WHERE ownerAddress = ? AND status = 'active'`
+    ).get(normalized)
+    if (byWallet) {
+      const e = new Error(`Wallet already registered as: ${byWallet.requesterAgentId}`)
+      e.code = 'WALLET_ALREADY_REGISTERED'; throw e
+    }
+
+    // Create identity with zero budget — faucet grant is separate
+    seedRequester({
+      rawKey: null,
+      requesterAgentId,
+      ownerAddress: normalized,
+      remainingBaseUnits:  '0',
+      maxPerTaskBaseUnits: '0',
+      dailyLimitBaseUnits: '0',
+    })
+
+    // Bind wallet auth method
+    bindWalletMethod({ requesterAgentId, ownerAddress: normalized })
+  })()
+
+  return { ok: true, requesterAgentId, ownerAddress: normalized }
+}
+
+// ── Faucet: one-time budget grant ────────────────────────────────────────────
+
+const FAUCET_ENABLED    = process.env.FAUCET_ENABLED !== 'false'  // on by default
+const FAUCET_BUDGET     = process.env.FAUCET_BUDGET     || '10000000000000000000'  // 10 DATA
+const FAUCET_PER_TASK   = process.env.FAUCET_PER_TASK   || '2000000000000000000'   // 2 DATA
+const FAUCET_DAILY      = process.env.FAUCET_DAILY      || '5000000000000000000'   // 5 DATA
+
+export function claimFaucet({ requesterAgentId, ownerAddress }) {
+  if (!FAUCET_ENABLED) {
+    const e = new Error('Faucet is currently disabled')
+    e.code = 'FAUCET_DISABLED'; throw e
+  }
+
+  const database = getDb()
+  const normalized = normalizeAddress(ownerAddress)
+
+  // Must be a registered identity
+  const identity = database.prepare(
+    `SELECT * FROM RequesterIdentity WHERE requesterAgentId = ? AND status = 'active'`
+  ).get(requesterAgentId)
+  if (!identity) {
+    const e = new Error('Requester not found')
+    e.code = 'REQUESTER_NOT_FOUND'; throw e
+  }
+  if (identity.ownerAddress !== normalized) {
+    const e = new Error('ownerAddress mismatch')
+    e.code = 'OWNER_MISMATCH'; throw e
+  }
+
+  // Check if already claimed — keyed on faucetClaimedAt, not balance (balance can reach 0 after spending)
+  const budget = database.prepare(
+    `SELECT faucetClaimedAt FROM RequesterBudget WHERE requesterAgentId = ?`
+  ).get(requesterAgentId)
+  if (budget && budget.faucetClaimedAt !== null) {
+    const e = new Error('Faucet already claimed')
+    e.code = 'ALREADY_CLAIMED'; throw e
+  }
+
+  // Grant budget
+  const now = nowIso()
+  database.prepare(`
+    UPDATE RequesterBudget
+    SET remainingBaseUnits = ?, maxPerTaskBaseUnits = ?, dailyLimitBaseUnits = ?,
+        dailySpentBaseUnits = '0', dailySpentWindowStart = ?, faucetClaimedAt = ?, updatedAt = ?
+    WHERE requesterAgentId = ?
+  `).run(FAUCET_BUDGET, FAUCET_PER_TASK, FAUCET_DAILY, utcDayStart(now), now, now, requesterAgentId)
+
+  database.prepare(`
+    INSERT INTO LedgerEvent
+      (eventId, eventType, taskId, requesterAgentId, providerAgentId,
+       providerOwnerAddress, amountBaseUnits, currency, agreementHash, createdAt)
+    VALUES (?, 'budget_seeded', NULL, ?, NULL, NULL, ?, 'DATA', NULL, ?)
+  `).run(randomUUID(), requesterAgentId, FAUCET_BUDGET, now)
+
+  return { ok: true, requesterAgentId, budget: { remaining: FAUCET_BUDGET, currency: 'DATA' } }
 }

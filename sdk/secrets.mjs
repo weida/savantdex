@@ -12,8 +12,9 @@
  * Legacy fallback (migration period):
  *   KEYSTORE_PASSWORD   Plain-text password — accepted with a deprecation warning
  *
- * The decrypted file must be valid JSON containing at minimum:
- *   { "KEYSTORE_PASSWORD": "..." }
+ * The decrypted file must be valid JSON. Required fields are validated by the
+ * caller (e.g. signer-gateway expects KEYSTORE_PASSWORD + SIGNER_TOKEN; relay
+ * workers expect PRIVATE_KEYS[AGENT_ID]). This module only handles decryption.
  *
  * One-time setup (run on the host, not in Node):
  *   # 1. Generate an age identity key (once per host)
@@ -67,10 +68,6 @@ export async function loadSecrets() {
       parsed = JSON.parse(decrypted)
     } catch {
       throw new Error('[secrets] Decrypted content is not valid JSON')
-    }
-
-    if (!parsed.KEYSTORE_PASSWORD) {
-      throw new Error('[secrets] Decrypted secrets missing required field: KEYSTORE_PASSWORD')
     }
 
     console.log('[secrets] Loaded from age-encrypted file:', sp)

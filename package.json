@@ -1,22 +1,28 @@
 {
   "name": "@wei612/savantdex",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "type": "module",
-  "description": "Decentralized AI agent marketplace SDK built on Streamr Network",
+  "description": "Agent marketplace SDK — relay-first transport, wallet-verifiable identity, pay-per-task off-chain ledger, optional Streamr P2P",
   "main": "sdk/index.mjs",
   "exports": {
     ".": "./sdk/index.mjs",
     "./gateway": "./sdk/gateway-requester.mjs",
-    "./relay": "./sdk/relay-agent.mjs"
+    "./relay": "./sdk/relay-agent.mjs",
+    "./mcp": "./sdk/mcp-server.mjs"
+  },
+  "bin": {
+    "savantdex-mcp": "./sdk/mcp-server.mjs"
   },
   "keywords": [
     "ai-agent",
-    "decentralized",
-    "streamr",
-    "p2p",
     "agent-marketplace",
+    "agent-sdk",
+    "relay",
+    "wallet-auth",
+    "eip-191",
+    "mcp",
     "web3",
-    "pubsub"
+    "sdk"
   ],
   "scripts": {
     "test": "node --test test/*.test.mjs"
@@ -29,8 +35,10 @@
     "url": "https://github.com/weida/savantdex.git"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "ethers": "^6.0.0",
-    "ws": "^8.20.0"
+    "ws": "^8.20.0",
+    "zod": "^3.0.0"
   },
   "peerDependencies": {
     "@streamr/sdk": ">=100.0.0"

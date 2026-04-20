@@ -30,8 +30,8 @@
  */
 
 import WebSocket from 'ws'
+import { createHash, randomBytes } from 'crypto'
 import { Wallet } from 'ethers'
-import { randomBytes } from 'crypto'
 
 const MIN_RECONNECT_MS = 1000
 const MAX_RECONNECT_MS = 60000
@@ -213,6 +213,40 @@ export class RelayAgent {
       trySend(ws, { type: 'result', taskId, error: err.message })
     }
   }
+
+  /**
+   * Self-register this agent in the registry via PoW + wallet signature.
+   * One-shot — does not maintain a connection. Call before connect().
+   *
+   * @param {object}   opts
+   * @param {string}   opts.registryUrl   — registry base URL, e.g. "https://savantdex.weicao.dev"
+   * @param {object}   opts.signer        — any { address, signMessage(msg): Promise<string> }
+   * @param {string}   opts.agentId       — desired agent ID (lowercase alphanumeric, 4-50 chars)
+   * @param {string[]} opts.capabilities  — e.g. ["token-risk"]
+   * @param {object}   [opts.meta]        — extra fields: name, description, taskType, inputSchema, ...
+   * @returns {Promise<{ ok, agentId, streamId, ownerAddress, transport }>}
+   */
+  static async register({ registryUrl, signer, agentId, capabilities, meta = {} }) {
+    const base = registryUrl.replace(/\/$/, '')
+
+    const { challengeId, prefix, difficulty } = await fetch(`${base}/register/challenge`, { method: 'POST' })
+      .then(r => r.json())
+
+    const nonce = solvePow(prefix, difficulty)
+    const ownerAddress = (signer.address || await signer.getAddress()).toLowerCase()
+    const timestamp = Date.now()
+    const message = `savantdex-register-agent:${agentId}:${ownerAddress}:${timestamp}`
+    const signature = await signer.signMessage(message)
+
+    const res = await fetch(`${base}/register/agent`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agentId, ownerAddress, timestamp, signature, challengeId, nonce, capabilities, ...meta }),
+    })
+    const data = await res.json()
+    if (!res.ok) throw Object.assign(new Error(data.error || `Register failed (${res.status})`), { status: res.status })
+    return data
+  }
 }
 
 function trySend(ws, obj) {
@@ -222,5 +256,18 @@ function trySend(ws, obj) {
     }
   } catch {
     // Swallow — connection may be closing
+  }
+}
+
+function solvePow(prefix, difficulty) {
+  const fullBytes = Math.floor(difficulty / 8)
+  const remainBits = difficulty % 8
+  const mask = remainBits > 0 ? (0xFF << (8 - remainBits)) & 0xFF : 0
+  for (let nonce = 0; ; nonce++) {
+    const hash = createHash('sha256').update(prefix + String(nonce)).digest()
+    let ok = true
+    for (let i = 0; i < fullBytes; i++) { if (hash[i] !== 0) { ok = false; break } }
+    if (ok && remainBits > 0 && (hash[fullBytes] & mask) !== 0) ok = false
+    if (ok) return String(nonce)
   }
 }

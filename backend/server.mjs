@@ -15,16 +15,20 @@
  *   KEYSTORE_PATH, KEYSTORE_PASSWORD (or SECRETS_PATH + AGE_IDENTITY_PATH)
  */
 
+import process from 'process'
+process.umask(0o077)  // restrict new file creation to owner-only (600/700)
+
 import http from 'http'
 import { ethers } from 'ethers'
-import { timingSafeEqual, randomBytes } from 'crypto'
+import { timingSafeEqual, randomBytes, createHash } from 'crypto'
 import { execFileSync } from 'node:child_process'
 import { readFileSync, writeFileSync, existsSync, renameSync } from 'fs'
 import { initRelay, getRelayStatus, relayTask, relayAgentCount, getRelayConnections } from './ws-relay.mjs'
-import { SavantDex } from '../savantdex/sdk/index.mjs'
-import { RemoteSignerIdentity } from '../savantdex/sdk/remote-identity.mjs'
-import { loadSecrets } from '../savantdex/sdk/secrets.mjs'
-import { loadPrivateKey } from '../savantdex/sdk/keystore.mjs'
+import { createPowChallenge, verifyPow } from '../sdk/pow.mjs'
+import { SavantDex } from '../sdk/index.mjs'
+import { RemoteSignerIdentity } from '../sdk/remote-identity.mjs'
+import { loadSecrets } from '../sdk/secrets.mjs'
+import { loadPrivateKey } from '../sdk/keystore.mjs'
 import {
   initDb, resolveRequester, resolveApiKey, getAuthMethods, getRequesterIdentity, bindWalletMethod,
   createChallenge, getChallenge, consumeChallengeAndCreateSession, resolveSession, revokeSession,
@@ -33,8 +37,15 @@ import {
   getBudget, getProviderReceivable, getTaskTrace, getAuthStats,
   createFundingRecord, processFunding, getFundingHistory, getFundingById,
   createSettlementRecord, processSettlement, getSettlementHistory, getSettlementById,
-  writeDeliveryReceipt,
+  writeDeliveryReceipt, getDeliveryReceipt, getTaskAgreementForReceipt,
+  computeResultHash,
+  selfRegisterRequester,
+  claimFaucet,
 } from './payment.mjs'
+import {
+  buildReceiptPayload, signReceiptPayload,
+  buildExportPayload, signExportPayload, canonicalExportMessage,
+} from './receipt.mjs'
 
 const PORT          = process.env.PORT          || 4000
 const REGISTRY_URL  = process.env.REGISTRY_URL  || 'http://localhost:3000'
@@ -173,20 +184,24 @@ async function resolveAgentCard(agentId) {
 
 // --- Gateway ---
 console.log('[Backend] Initializing Streamr gateway...')
-const gateway = new SavantDex({
-  ...gatewayAuth,
-  agentId: 'api-gateway',
-  network: { websocketPort: Number(process.env.WEBSOCKET_PORT || 32204), externalIp: EXTERNAL_IP }
-})
-
-await gateway.register()
-const gatewayAddress = await gateway.getAddress()
-console.log(`[Backend] Gateway ready: ${gatewayAddress}`)
-
-await gateway.onTask(async (_task, reply) => {
-  await reply({ error: 'gateway does not process tasks directly' })
-})
-console.log('[Backend] P2P inbox pre-warmed')
+let gateway = null
+let gatewayAddress = null
+try {
+  gateway = new SavantDex({
+    ...gatewayAuth,
+    agentId: 'api-gateway',
+    network: { websocketPort: Number(process.env.WEBSOCKET_PORT || 32204), externalIp: EXTERNAL_IP }
+  })
+  await gateway.register()
+  gatewayAddress = await gateway.getAddress()
+  console.log(`[Backend] Gateway ready: ${gatewayAddress}`)
+  await gateway.onTask(async (_task, reply) => {
+    await reply({ error: 'gateway does not process tasks directly' })
+  })
+  console.log('[Backend] P2P inbox pre-warmed')
+} catch (err) {
+  console.warn(`[Backend] Streamr gateway unavailable (relay-only mode): ${err.message}`)
+}
 
 // --- Rate limiting ---
 //
@@ -298,7 +313,12 @@ function corsHeaders(req) {
 }
 
 function send(res, status, data) {
-  const headers = { 'Content-Type': 'application/json', ...corsHeaders(res.req) }
+  const headers = {
+    'Content-Type': 'application/json',
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'DENY',
+    ...corsHeaders(res.req),
+  }
   res.writeHead(status, headers)
   res.end(JSON.stringify(data))
 }
@@ -536,18 +556,46 @@ async function handleTask(req, res) {
 
     const receivedAt = Date.now() - start
 
-    // ── Post-completion charging (same path for both transports) ────────────
+    // ── Post-completion ─────────────────────────────────────────────────────
+    const resultStatus = result?.status || 'completed'
+    const ledgerStatus = ['completed','failed','timeout','needs_disambiguation'].includes(resultStatus)
+      ? resultStatus
+      : 'completed'
+
+    // 1) Trust primitive: sign + persist a delivery receipt for every completed
+    //    task, regardless of payment configuration. If the task went through
+    //    the payment path, we embed its agreementHash; otherwise the receipt
+    //    still attests to "gateway observed this agent returning this result".
+    if (ledgerStatus === 'completed') {
+      try {
+        const agr = getTaskAgreementForReceipt(taskId)
+        const payload = buildReceiptPayload({
+          taskId,
+          agreementHash:        agr?.agreementHash        || null,
+          providerAgentId:      agr?.providerAgentId      || agentId,
+          providerOwnerAddress: agr?.providerOwnerAddress || providerOwnerAddress || null,
+          requesterAgentId:     agr?.requesterAgentId     || requesterAuth?.requesterAgentId || null,
+          taskType:             agr?.taskType             || taskType || type,
+          resultHash:           computeResultHash(result),
+          completedAt:          new Date().toISOString(),
+        })
+        const signed = await signReceiptPayload(payload)
+        writeDeliveryReceipt({
+          payload,
+          gatewayAddress,
+          signedPayload: signed ? payload : null,
+          signature:     signed?.signature     || null,
+          signerAddress: signed?.signerAddress || null,
+        })
+      } catch (e) {
+        console.warn(`[Receipt] write failed for ${taskId}: ${e.message}`)
+      }
+    }
+
+    // 2) Payment ledger: only runs for tasks that entered the paid path.
     if (PAYMENT_ENABLED && requesterAuth) {
-      const resultStatus = result?.status || 'completed'
-      const ledgerStatus = ['completed','failed','timeout','needs_disambiguation'].includes(resultStatus)
-        ? resultStatus
-        : 'completed'
       markStatus(taskId, ledgerStatus)
       if (ledgerStatus === 'completed') {
-        // Phase C: write delivery receipt before charging
-        try { writeDeliveryReceipt({ taskId, result, gatewayAddress }) } catch (e) {
-          console.warn(`[Payment] DeliveryReceipt write failed for ${taskId}: ${e.message}`)
-        }
         const charge = chargeCompleted(taskId)
         if (!charge.charged && charge.reason !== 'free_task' && charge.reason !== 'already_charged') {
           console.warn(`[Payment] Charge skipped for ${taskId}: ${charge.reason}`)
@@ -584,8 +632,12 @@ async function handleTask(req, res) {
 async function handleAgents(req, res) {
   try {
     const inUrl = new URL(req.url, 'http://x')
-    const qs = inUrl.search
-    const resp = await fetch(`${REGISTRY_URL}/agents/search${qs}`)
+    const fwd = new URLSearchParams()
+    for (const k of ['capability', 'category', 'q', 'keyword', 'supportsAsync', 'maxExpectedLatencyMs']) {
+      const v = inUrl.searchParams.get(k)
+      if (v) fwd.set(k, v.slice(0, 200))
+    }
+    const resp = await fetch(`${REGISTRY_URL}/agents/search?${fwd}`)
     if (!resp.ok) return err(res, 502, 'Registry unavailable', 'REGISTRY_ERROR')
     const data = await resp.json()
     // Merge live metrics into each agent record
@@ -606,6 +658,47 @@ async function handleAgent(agentId, res) {
     if (!resp.ok) return err(res, 404, 'Agent not found', 'AGENT_NOT_FOUND')
     const agent = await resp.json()
     send(res, 200, { ...agent, ...getMetricsSummary(agentId) })
+  } catch (e) {
+    err(res, 502, 'Registry unavailable', 'REGISTRY_ERROR')
+  }
+}
+
+/**
+ * GET /agents/:id/export — portable agent record.
+ *
+ * Intent: a provider can download a canonical, signed snapshot of their agent's
+ * registration to prove off-platform migration. The payload is the minimum
+ * transferable record; the signature lets a receiving party verify it was
+ * genuinely exported from this platform.
+ *
+ * Response shape:
+ *   {
+ *     payload:       { version, agentId, ownerAddress, transport, capabilities, ... },
+ *     recordHash:    "<sha256 of canonical payload>",
+ *     signature:     "0x<sig>" | null,
+ *     signerAddress: "0x<addr>" | null     // platform gateway address
+ *   }
+ *
+ * Unsigned fallback: if the signer is offline, returns payload+recordHash with
+ * null signature. Verifier can still compare the hash across deployments.
+ */
+async function handleAgentExport(agentId, res) {
+  try {
+    const resp = await fetch(`${REGISTRY_URL}/agents/${encodeURIComponent(agentId)}`)
+    if (!resp.ok) return err(res, 404, 'Agent not found', 'AGENT_NOT_FOUND')
+    const agent = await resp.json()
+
+    const payload = buildExportPayload(agent)
+    const canonicalMsg = canonicalExportMessage(payload)
+    const recordHash = createHash('sha256').update(canonicalMsg).digest('hex')
+    const signed = await signExportPayload(payload)
+
+    send(res, 200, {
+      payload,
+      recordHash,
+      signature:     signed?.signature     || null,
+      signerAddress: signed?.signerAddress || null,
+    })
   } catch (e) {
     err(res, 502, 'Registry unavailable', 'REGISTRY_ERROR')
   }
@@ -737,7 +830,7 @@ async function handleVerifySignature(req, res) {
 
   let recovered
   try {
-    recovered = ethers.utils.verifyMessage(challenge.message, signature)
+    recovered = ethers.verifyMessage(challenge.message, signature)
   } catch {
     return err(res, 400, 'Invalid signature format', 'SIGNATURE_INVALID')
   }
@@ -765,6 +858,98 @@ async function handleRevokeSession(req, res) {
     send(res, 200, revokeSession(sessionToken))
   } catch (e) {
     if (e.code === 'SESSION_NOT_FOUND') return err(res, 404, e.message, e.code)
+    throw e
+  }
+}
+
+// ── Faucet: self-service registration ──────────────────────────────────────
+
+const AGENT_ID_RE = /^[a-z0-9][a-z0-9._-]{2,48}[a-z0-9]$/
+const REG_SIG_WINDOW_MS = 5 * 60 * 1000
+
+function handleRegisterChallenge(req, res) {
+  const winErr = checkWindowLimit(clientKey(req))
+  if (winErr) return err(res, 429, winErr.error, winErr.code)
+  send(res, 200, createPowChallenge())
+}
+
+async function handleRegisterRequester(req, res) {
+  const winErr = checkWindowLimit(clientKey(req))
+  if (winErr) return err(res, 429, winErr.error, winErr.code)
+
+  let body
+  try { body = JSON.parse(await readBody(req)) } catch { return err(res, 400, 'Invalid JSON', 'INVALID_JSON') }
+
+  const { requesterAgentId, ownerAddress, timestamp, signature, challengeId, nonce } = body
+  if (!requesterAgentId || !ownerAddress || !timestamp || !signature || !challengeId || !nonce)
+    return err(res, 400, 'requesterAgentId, ownerAddress, timestamp, signature, challengeId, nonce required', 'MISSING_FIELDS')
+
+  if (!AGENT_ID_RE.test(requesterAgentId))
+    return err(res, 400, 'Invalid requesterAgentId format (lowercase alphanumeric, 4-50 chars)', 'INVALID_ID')
+
+  if (Math.abs(Date.now() - timestamp) > REG_SIG_WINDOW_MS)
+    return err(res, 400, 'Timestamp out of range (±5 min)', 'TIMESTAMP_EXPIRED')
+
+  // Verify PoW
+  try { verifyPow(challengeId, nonce) } catch (e) {
+    return err(res, 400, e.message, e.code || 'POW_INVALID')
+  }
+
+  // Verify wallet signature
+  const message = `savantdex-register-requester:${requesterAgentId}:${ownerAddress.toLowerCase()}:${timestamp}`
+  let recovered
+  try { recovered = ethers.verifyMessage(message, signature) } catch {
+    return err(res, 400, 'Invalid signature format', 'SIGNATURE_INVALID')
+  }
+  if (recovered.toLowerCase() !== ownerAddress.toLowerCase())
+    return err(res, 401, 'Signature does not match ownerAddress', 'SIGNATURE_MISMATCH')
+
+  try {
+    const result = selfRegisterRequester({ requesterAgentId, ownerAddress })
+    send(res, 201, result)
+  } catch (e) {
+    if (e.code === 'AGENT_ID_TAKEN' || e.code === 'WALLET_ALREADY_REGISTERED')
+      return err(res, 409, e.message, e.code)
+    throw e
+  }
+}
+
+async function handleFaucetClaim(req, res) {
+  const winErr = checkWindowLimit(clientKey(req))
+  if (winErr) return err(res, 429, winErr.error, winErr.code)
+
+  let body
+  try { body = JSON.parse(await readBody(req)) } catch { return err(res, 400, 'Invalid JSON', 'INVALID_JSON') }
+
+  const { requesterAgentId, ownerAddress, timestamp, signature, challengeId, nonce } = body
+  if (!requesterAgentId || !ownerAddress || !timestamp || !signature || !challengeId || !nonce)
+    return err(res, 400, 'requesterAgentId, ownerAddress, timestamp, signature, challengeId, nonce required', 'MISSING_FIELDS')
+
+  if (Math.abs(Date.now() - timestamp) > REG_SIG_WINDOW_MS)
+    return err(res, 400, 'Timestamp out of range (±5 min)', 'TIMESTAMP_EXPIRED')
+
+  // Verify PoW
+  try { verifyPow(challengeId, nonce) } catch (e) {
+    return err(res, 400, e.message, e.code || 'POW_INVALID')
+  }
+
+  // Verify wallet signature
+  const message = `savantdex-faucet-claim:${requesterAgentId}:${ownerAddress.toLowerCase()}:${timestamp}`
+  let recovered
+  try { recovered = ethers.verifyMessage(message, signature) } catch {
+    return err(res, 400, 'Invalid signature format', 'SIGNATURE_INVALID')
+  }
+  if (recovered.toLowerCase() !== ownerAddress.toLowerCase())
+    return err(res, 401, 'Signature does not match ownerAddress', 'SIGNATURE_MISMATCH')
+
+  try {
+    const result = claimFaucet({ requesterAgentId, ownerAddress })
+    send(res, 200, result)
+  } catch (e) {
+    if (e.code === 'FAUCET_DISABLED')     return err(res, 503, e.message, e.code)
+    if (e.code === 'REQUESTER_NOT_FOUND') return err(res, 404, e.message, e.code)
+    if (e.code === 'OWNER_MISMATCH')      return err(res, 403, e.message, e.code)
+    if (e.code === 'ALREADY_CLAIMED')     return err(res, 409, e.message, e.code)
     throw e
   }
 }
@@ -858,12 +1043,22 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && url.pathname === '/task')          return handleTask(req, res)
     if (req.method === 'GET'  && url.pathname === '/agents')        return handleAgents(req, res)
     if (req.method === 'GET'  && url.pathname.startsWith('/agents/')) {
-      const agentId = decodeURIComponent(url.pathname.slice('/agents/'.length))
-      return handleAgent(agentId, res)
+      const rest = decodeURIComponent(url.pathname.slice('/agents/'.length))
+      const exportMatch = rest.match(/^([^/]+)\/export$/)
+      if (exportMatch) return handleAgentExport(exportMatch[1], res)
+      return handleAgent(rest, res)
     }
     if (req.method === 'GET'  && url.pathname === '/debug/agents')  return handleDebugAgents(req, res)
     if (req.method === 'GET'  && url.pathname === '/health')
       return send(res, 200, { ok: true })
+
+    const receiptMatch = url.pathname.match(/^\/receipts\/([^/]+)$/)
+    if (req.method === 'GET' && receiptMatch) {
+      const taskId = decodeURIComponent(receiptMatch[1])
+      const receipt = getDeliveryReceipt(taskId)
+      if (!receipt) return err(res, 404, 'Receipt not found', 'NOT_FOUND')
+      return send(res, 200, receipt)
+    }
 
     const budgetMatch = url.pathname.match(/^\/requesters\/([^/]+)\/budget$/)
     if (req.method === 'GET' && budgetMatch)
@@ -888,6 +1083,13 @@ const server = http.createServer(async (req, res) => {
     const taskMatch = url.pathname.match(/^\/tasks\/([^/]+)$/)
     if (req.method === 'GET' && taskMatch)
       return handleGetTask(decodeURIComponent(taskMatch[1]), req, res)
+
+    if (req.method === 'POST' && url.pathname === '/register/challenge')
+      return handleRegisterChallenge(req, res)
+    if (req.method === 'POST' && url.pathname === '/register/requester')
+      return handleRegisterRequester(req, res)
+    if (req.method === 'POST' && url.pathname === '/faucet/claim')
+      return handleFaucetClaim(req, res)
 
     if (req.method === 'POST' && url.pathname === '/auth/challenge')
       return handleCreateChallenge(req, res)
@@ -953,6 +1155,11 @@ server.listen(PORT, '127.0.0.1', () => {
   console.log(`  GET  /providers/:addr/receivables               - Provider receivables (accrued/settled/unpaid)`)
   console.log(`  GET  /providers/:addr/settlements               - Provider settlement history`)
   console.log(`  GET  /tasks/:taskId                             - Task trace`)
+  console.log(`  GET  /receipts/:taskId                          - Signed delivery receipt (Phase 1)`)
+  console.log(`  GET  /agents/:id/export                         - Portable signed agent record`)
+  console.log(`  POST /register/challenge                        - PoW challenge for self-registration`)
+  console.log(`  POST /register/requester                        - Self-register requester (wallet sig + PoW)`)
+  console.log(`  POST /faucet/claim                              - Claim faucet grant (10 DATA, once per requester)`)
   console.log(`  POST /auth/challenge                            - Request wallet auth challenge`)
   console.log(`  POST /auth/verify-signature                     - Verify signature, get session token`)
   console.log(`  POST /auth/session/revoke                       - Revoke session token`)

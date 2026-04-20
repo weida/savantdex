@@ -38,6 +38,8 @@
  *   const result = await client.run('wallet-intelligence-v1', { wallet: '0x...' })
  */
 
+import { createHash } from 'crypto'
+
 const SESSION_REFRESH_MARGIN_MS = 60 * 1000  // re-auth when <60s remaining
 
 export class GatewayRequester {
@@ -343,6 +345,38 @@ export class GatewayRequester {
       taskType: agentIdOrCard.callHint?.taskType || null,
     }
   }
+
+  /**
+   * Self-register a new requester identity via PoW + wallet signature.
+   * Creates the identity with zero budget — call POST /faucet/claim separately to top up.
+   *
+   * @param {object}  opts
+   * @param {string}  opts.gatewayUrl         — gateway base URL, e.g. "https://savantdex.weicao.dev"
+   * @param {object}  opts.signer             — any { address, signMessage(msg): Promise<string> }
+   * @param {string}  opts.requesterAgentId   — desired requester ID (lowercase alphanumeric, 4-50 chars)
+   * @returns {Promise<{ ok, requesterAgentId, ownerAddress }>}
+   */
+  static async register({ gatewayUrl, signer, requesterAgentId }) {
+    const base = gatewayUrl.replace(/\/$/, '')
+
+    const { challengeId, prefix, difficulty } = await fetch(`${base}/register/challenge`, { method: 'POST' })
+      .then(r => r.json())
+
+    const nonce = _solvePow(prefix, difficulty)
+    const ownerAddress = (signer.address || await signer.getAddress()).toLowerCase()
+    const timestamp = Date.now()
+    const message = `savantdex-register-requester:${requesterAgentId}:${ownerAddress}:${timestamp}`
+    const signature = await signer.signMessage(message)
+
+    const res = await fetch(`${base}/register/requester`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ requesterAgentId, ownerAddress, timestamp, signature, challengeId, nonce }),
+    })
+    const data = await res.json()
+    if (!res.ok) throw Object.assign(new Error(data.error || `Register failed (${res.status})`), { status: res.status, code: data.code })
+    return data
+  }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -351,4 +385,17 @@ function _defaultRegistryUrl(gatewayUrl) {
   // Default: same host as gateway (gateway already proxies /agents endpoints).
   // Callers can override with an explicit registryUrl for split deployments.
   return gatewayUrl.replace(/\/$/, '')
+}
+
+function _solvePow(prefix, difficulty) {
+  const fullBytes = Math.floor(difficulty / 8)
+  const remainBits = difficulty % 8
+  const mask = remainBits > 0 ? (0xFF << (8 - remainBits)) & 0xFF : 0
+  for (let nonce = 0; ; nonce++) {
+    const hash = createHash('sha256').update(prefix + String(nonce)).digest()
+    let ok = true
+    for (let i = 0; i < fullBytes; i++) { if (hash[i] !== 0) { ok = false; break } }
+    if (ok && remainBits > 0 && (hash[fullBytes] & mask) !== 0) ok = false
+    if (ok) return String(nonce)
+  }
 }
