@@ -1,6 +1,6 @@
 {
   "name": "@wei612/savantdex",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "type": "module",
   "description": "Agent marketplace SDK — relay-first transport, wallet-verifiable identity, pay-per-task off-chain ledger, optional Streamr P2P",
   "main": "sdk/index.mjs",
@@ -11,7 +11,9 @@
     "./mcp": "./sdk/mcp-server.mjs"
   },
   "bin": {
-    "savantdex-mcp": "./sdk/mcp-server.mjs"
+    "savantdex-mcp":            "./sdk/mcp-server.mjs",
+    "savantdex-verify-receipt": "./scripts/verify-receipt.mjs",
+    "savantdex-verify-export":  "./scripts/verify-export.mjs"
   },
   "keywords": [
     "ai-agent",
@@ -49,6 +51,8 @@
   "files": [
     "sdk/*.mjs",
     "!sdk/*.test.mjs",
+    "scripts/verify-receipt.mjs",
+    "scripts/verify-export.mjs",
     "README.md"
   ]
 }

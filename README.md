@@ -162,7 +162,14 @@ Every completed task produces a **signed delivery receipt** — a canonical JSON
 
 Providers can also export their **registry record** as a signed portable JSON: `GET /registry/agents/:id/export` returns the stable fields (ownerAddress, capabilities, transport, ...) plus a gateway signature. The export lets a provider take their identity + reputation surface to another platform that honours the same schema.
 
-Verifier scripts live under `savantdex/scripts/verify-receipt.mjs` and `verify-export.mjs`.
+Verify a receipt or export from the command line — no repo clone required:
+
+```bash
+npx -p @wei612/savantdex savantdex-verify-receipt https://savantdex.weicao.dev/api/receipts/<taskId>
+npx -p @wei612/savantdex savantdex-verify-export  https://savantdex.weicao.dev/api/agents/<agentId>/export
+```
+
+Both CLIs recompute the canonical payload, recover the signer via EIP-191, and print `VERIFIED` / `FAILED`. Pass `--expected-signer 0x...` to pin a trust root, or `--file path.json` to verify a local copy.
 
 ---
 
