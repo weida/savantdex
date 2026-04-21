@@ -1034,20 +1034,30 @@ export function writeDeliveryReceipt({
   payload,
   signedPayload = null, signature = null, signerAddress = null,
   gatewayAddress = null,
+  providerAttestation = null,
 }) {
   if (!payload || !payload.taskId || !payload.resultHash) return
 
-  const isSigned  = signedPayload && signature && signerAddress
-  const proofType = isSigned ? 'gateway-signed-v1' : 'gateway-observed'
+  const gatewaySigned  = signedPayload && signature && signerAddress
+  const providerSigned = providerAttestation
+                         && providerAttestation.payload
+                         && providerAttestation.signature
+                         && providerAttestation.address
+  const proofType = providerSigned && gatewaySigned
+    ? 'dual-signed-v1'
+    : gatewaySigned
+      ? 'gateway-signed-v1'
+      : 'gateway-observed'
   const now       = nowIso()
 
-  const proofPayload = isSigned
+  const proofPayload = gatewaySigned
     ? {
         proofType,
         gatewayAddress: signerAddress,
         observedAt:     now,
         signedPayload,
         signature,
+        ...(providerSigned ? { providerAttestation } : {}),
       }
     : {
         proofType,
@@ -1100,13 +1110,15 @@ export function getDeliveryReceipt(taskId) {
     payload:       proof.signedPayload || null,
     signature:     proof.signature     || null,
     signerAddress: isSignedProofType(row.proofType) ? proof.gatewayAddress : null,
+    // For dual-signed-v1 only: provider's independent co-signature
+    providerAttestation: proof.providerAttestation || null,
     // Legacy fields kept for callers that saw the old shape
     proofPayload:  proof,
   }
 }
 
 function isSignedProofType(t) {
-  return typeof t === 'string' && t.startsWith('gateway-signed-')
+  return typeof t === 'string' && (t.startsWith('gateway-signed-') || t.startsWith('dual-signed-'))
 }
 
 /**
