@@ -32,6 +32,8 @@
 import WebSocket from 'ws'
 import { createHash, randomBytes } from 'crypto'
 import { Wallet } from 'ethers'
+import { computeResultHash } from './canonical.mjs'
+import { buildAttestationPayload, signAttestation } from './attestation.mjs'
 
 const MIN_RECONNECT_MS = 1000
 const MAX_RECONNECT_MS = 60000
@@ -208,9 +210,27 @@ export class RelayAgent {
 
     try {
       const output = await this.#taskHandler({ taskId, taskType, input, timeoutMs })
-      trySend(ws, { type: 'result', taskId, output })
+      const attestation = await this.#buildAttestation(taskId, output)
+      trySend(ws, { type: 'result', taskId, output, attestation })
     } catch (err) {
       trySend(ws, { type: 'result', taskId, error: err.message })
+    }
+  }
+
+  async #buildAttestation(taskId, output) {
+    try {
+      const address = await this.#signer.getAddress()
+      const payload = buildAttestationPayload({
+        taskId,
+        providerAgentId:      this.#agentId,
+        providerOwnerAddress: address,
+        resultHash:           computeResultHash(output),
+        completedAt:          new Date().toISOString(),
+      })
+      return await signAttestation(payload, this.#signer)
+    } catch (err) {
+      console.warn(`[RelayAgent] attestation failed for ${taskId}: ${err.message}`)
+      return null
     }
   }
 
