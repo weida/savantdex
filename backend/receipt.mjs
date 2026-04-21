@@ -16,19 +16,13 @@
  * DeliveryReceipt rows.
  */
 
+import { sortKeysDeep } from '../sdk/canonical.mjs'
+
 const SIGNER_URL   = (process.env.SIGNER_ADDRESS || 'http://127.0.0.1:17099').replace(/\/$/, '')
 const SIGNER_TOKEN = process.env.SIGNER_TOKEN || ''
 const SIGN_TIMEOUT_MS = Number(process.env.RECEIPT_SIGN_TIMEOUT_MS || 2500)
 
 export const RECEIPT_VERSION = 'v1'
-
-function sortKeysDeep(val) {
-  if (Array.isArray(val)) return val.map(sortKeysDeep)
-  if (val !== null && typeof val === 'object') {
-    return Object.keys(val).sort().reduce((acc, k) => { acc[k] = sortKeysDeep(val[k]); return acc }, {})
-  }
-  return val
-}
 
 /**
  * Build the canonical receipt payload object for a completed task.

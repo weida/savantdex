@@ -14,6 +14,7 @@
 import { verifyMessage } from 'ethers'
 import { createHash } from 'crypto'
 import { readFile } from 'fs/promises'
+import { sortKeysDeep } from '../sdk/canonical.mjs'
 
 const args = process.argv.slice(2)
 function arg(flag) {
@@ -28,14 +29,6 @@ const expectedSig = arg('--expected-signer')?.toLowerCase()
 if (!src && !fileFlag) {
   console.error('Usage: node verify-export.mjs <url> [--file path] [--expected-signer 0x...]')
   process.exit(2)
-}
-
-function sortKeysDeep(val) {
-  if (Array.isArray(val)) return val.map(sortKeysDeep)
-  if (val !== null && typeof val === 'object') {
-    return Object.keys(val).sort().reduce((acc, k) => { acc[k] = sortKeysDeep(val[k]); return acc }, {})
-  }
-  return val
 }
 
 async function load() {

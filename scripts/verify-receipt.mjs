@@ -25,6 +25,7 @@
 import { verifyMessage } from 'ethers'
 import { createHash } from 'crypto'
 import { readFile } from 'fs/promises'
+import { sortKeysDeep } from '../sdk/canonical.mjs'
 
 const args = process.argv.slice(2)
 
@@ -41,15 +42,6 @@ const resultFile   = arg('--result-file')
 if (!src && !fileFlag) {
   console.error('Usage: node verify-receipt.mjs <url-or-taskId> [--file path] [--expected-signer 0x...] [--result-file path]')
   process.exit(2)
-}
-
-// ── sortKeysDeep must match backend/payment.mjs exactly ────────────────────
-function sortKeysDeep(val) {
-  if (Array.isArray(val)) return val.map(sortKeysDeep)
-  if (val !== null && typeof val === 'object') {
-    return Object.keys(val).sort().reduce((acc, k) => { acc[k] = sortKeysDeep(val[k]); return acc }, {})
-  }
-  return val
 }
 
 async function loadReceipt() {

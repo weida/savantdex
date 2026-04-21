@@ -35,6 +35,7 @@
 import Database from 'better-sqlite3'
 import { createHash, randomBytes, randomUUID } from 'crypto'
 import { existsSync, mkdirSync } from 'fs'
+import { computeResultHash } from '../sdk/canonical.mjs'
 
 const DB_PATH = process.env.PAYMENT_DB_PATH || './payment.db'
 const AGREEMENT_VERSION  = '2'            // Phase C: evidence gate enforced for version >= 2
@@ -437,20 +438,10 @@ function addUnits(a, b) {
 function gte(a, b) { return BigInt(a) >= BigInt(b) }
 function lte(a, b) { return BigInt(a) <= BigInt(b) }
 
-// Phase C: resultHash canonicalization
-// Sorts all object keys alphabetically at every nesting level, then SHA-256.
-// Arrays are preserved in order. Primitives pass through unchanged.
-function sortKeysDeep(val) {
-  if (Array.isArray(val)) return val.map(sortKeysDeep)
-  if (val !== null && typeof val === 'object') {
-    return Object.keys(val).sort().reduce((acc, k) => { acc[k] = sortKeysDeep(val[k]); return acc }, {})
-  }
-  return val
-}
-
-export function computeResultHash(result) {
-  return createHash('sha256').update(JSON.stringify(sortKeysDeep(result))).digest('hex')
-}
+// resultHash canonicalization lives in ../sdk/canonical.mjs; re-exported here
+// so existing callers (`import { computeResultHash } from './payment.mjs'`)
+// keep working.
+export { computeResultHash }
 
 function computeAgreementHash({ agreementVersion, taskId, requesterAgentId, providerAgentId,
   providerOwnerAddress, taskType, pricingModel, billingRule, timeoutMs, createdAt }) {
