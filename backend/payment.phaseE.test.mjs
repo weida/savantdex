@@ -5,13 +5,11 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { Wallet, ethers } from 'ethers'
+import { Wallet, verifyMessage } from 'ethers'
 import { initDb, writeDeliveryReceipt, getDeliveryReceipt } from './payment.mjs'
 import { buildAttestationPayload, signAttestation, canonicalAttestationMessage } from '../sdk/attestation.mjs'
 import { computeResultHash } from '../sdk/canonical.mjs'
 import { verifyProviderAttestation } from './attestation.mjs'
-
-const verifyMessage = ethers.verifyMessage ?? ethers.utils.verifyMessage
 
 initDb(':memory:')
 

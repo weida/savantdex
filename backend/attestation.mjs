@@ -10,15 +10,11 @@
  * can log and degrade gracefully to gateway-signed-v1.
  */
 
-import { ethers } from 'ethers'
+import { verifyMessage } from 'ethers'
 import {
   ATTESTATION_VERSION,
   canonicalAttestationMessage,
 } from '../sdk/attestation.mjs'
-
-// backend depends on ethers v5 (see backend/node_modules); v5 exposes
-// verifyMessage under ethers.utils. sdk depends on ethers v6.
-const verifyMessage = ethers.verifyMessage ?? ethers.utils.verifyMessage
 
 export function verifyProviderAttestation({
   attestation,
