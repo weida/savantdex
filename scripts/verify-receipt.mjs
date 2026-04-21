@@ -34,13 +34,15 @@ function arg(flag) {
   return i >= 0 && i + 1 < args.length ? args[i + 1] : null
 }
 
-const src          = args.find(a => !a.startsWith('--'))
-const fileFlag     = arg('--file')
-const expectedSig  = arg('--expected-signer')?.toLowerCase()
-const resultFile   = arg('--result-file')
+const src              = args.find(a => !a.startsWith('--'))
+const fileFlag         = arg('--file')
+const expectedSig      = arg('--expected-signer')?.toLowerCase()
+const resultFile       = arg('--result-file')
+const requireProvider  = args.includes('--require-provider')
+const expectedProvider = arg('--expected-provider')?.toLowerCase()
 
 if (!src && !fileFlag) {
-  console.error('Usage: node verify-receipt.mjs <url-or-taskId> [--file path] [--expected-signer 0x...] [--result-file path]')
+  console.error('Usage: node verify-receipt.mjs <url-or-taskId> [--file path] [--expected-signer 0x...] [--result-file path] [--require-provider] [--expected-provider 0x...]')
   process.exit(2)
 }
 
@@ -69,8 +71,8 @@ console.log(`  taskId     : ${receipt.taskId}`)
 console.log(`  proofType  : ${receipt.proofType}`)
 console.log(`  createdAt  : ${receipt.createdAt}`)
 
-if (receipt.proofType !== 'gateway-signed-v1') {
-  console.log(c.warn(`\n  ⚠ This receipt is not a Phase-1 signed receipt (got ${receipt.proofType}).`))
+if (receipt.proofType !== 'gateway-signed-v1' && receipt.proofType !== 'dual-signed-v1') {
+  console.log(c.warn(`\n  ⚠ This receipt is not a signed receipt (got ${receipt.proofType}).`))
   console.log(c.dim('    The gateway observed this task completing, but did not sign the observation.'))
   console.log(c.dim('    Typical causes: SIGNER_TOKEN not configured on backend, signer service offline.'))
   process.exit(3)
@@ -108,7 +110,44 @@ if (expectedSig) {
   if (!trustMatches) failed = true
 }
 
-// 2) Optional: verify resultHash against a raw result file
+// 2) Provider attestation (dual-signed-v1 only)
+const providerAtt = receipt.providerAttestation
+if (requireProvider && !providerAtt) {
+  console.log('\n' + c.bad('✗ --require-provider set, but receipt has no providerAttestation'))
+  failed = true
+} else if (providerAtt) {
+  console.log('\n' + c.bold('Provider attestation check:'))
+  const { canonicalAttestationMessage } = await import('../sdk/attestation.mjs')
+  const provMsg = canonicalAttestationMessage(providerAtt.payload)
+  let provRecovered
+  try {
+    provRecovered = verifyMessage(provMsg, providerAtt.signature).toLowerCase()
+  } catch (err) {
+    console.log(c.bad(`  ✗ signature recovery failed: ${err.message}`))
+    failed = true
+  }
+  if (provRecovered) {
+    const claimed = (providerAtt.address || '').toLowerCase()
+    const sigOk   = provRecovered === claimed
+    console.log(`  claimed provider   : ${claimed}`)
+    console.log(`  recovered provider : ${provRecovered}`)
+    console.log(`  match              : ${sigOk ? c.ok('✓') : c.bad('✗')}`)
+    if (!sigOk) failed = true
+
+    const hashOk = providerAtt.payload.resultHash === payload.resultHash
+    console.log(`  resultHash match   : ${hashOk ? c.ok('✓') : c.bad('✗')}`)
+    if (!hashOk) failed = true
+
+    if (expectedProvider) {
+      const trustOk = provRecovered === expectedProvider
+      console.log(`  expected provider  : ${expectedProvider}`)
+      console.log(`  trust match        : ${trustOk ? c.ok('✓') : c.bad('✗')}`)
+      if (!trustOk) failed = true
+    }
+  }
+}
+
+// 3) Optional: verify resultHash against a raw result file
 if (resultFile) {
   const raw = JSON.parse(await readFile(resultFile, 'utf8'))
   const computed = createHash('sha256').update(JSON.stringify(sortKeysDeep(raw))).digest('hex')
@@ -120,7 +159,7 @@ if (resultFile) {
   if (!match) failed = true
 }
 
-// 3) Payload summary
+// 4) Payload summary
 console.log('\n' + c.bold('Payload:'))
 for (const [k, v] of Object.entries(payload)) {
   console.log(`  ${k.padEnd(22)}: ${v}`)
