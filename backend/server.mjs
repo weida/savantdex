@@ -46,6 +46,7 @@ import {
   buildReceiptPayload, signReceiptPayload,
   buildExportPayload, signExportPayload, canonicalExportMessage,
 } from './receipt.mjs'
+import { verifyProviderAttestation } from './attestation.mjs'
 
 const PORT          = process.env.PORT          || 4000
 const REGISTRY_URL  = process.env.REGISTRY_URL  || 'http://localhost:3000'
@@ -572,6 +573,7 @@ async function handleTask(req, res) {
     if (ledgerStatus === 'completed') {
       try {
         const agr = getTaskAgreementForReceipt(taskId)
+        const resultHash = computeResultHash(result)
         const payload = buildReceiptPayload({
           taskId,
           agreementHash:        agr?.agreementHash        || null,
@@ -579,16 +581,38 @@ async function handleTask(req, res) {
           providerOwnerAddress: agr?.providerOwnerAddress || providerOwnerAddress || null,
           requesterAgentId:     agr?.requesterAgentId     || requesterAuth?.requesterAgentId || null,
           taskType:             agr?.taskType             || taskType || type,
-          resultHash:           computeResultHash(result),
+          resultHash,
           completedAt:          new Date().toISOString(),
         })
         const signed = await signReceiptPayload(payload)
+
+        let verifiedProviderAttestation = null
+        if (providerAttestation) {
+          const check = verifyProviderAttestation({
+            attestation:          providerAttestation,
+            expectedTaskId:       taskId,
+            expectedResultHash:   resultHash,
+            expectedOwnerAddress: payload.providerOwnerAddress,
+            expectedAgentId:      payload.providerAgentId,
+          })
+          if (check.valid) {
+            verifiedProviderAttestation = {
+              payload:   providerAttestation.payload,
+              signature: providerAttestation.signature,
+              address:   check.recoveredAddress.toLowerCase(),
+            }
+          } else {
+            console.warn(`[Receipt] provider attestation rejected for ${taskId}: ${check.reason}`)
+          }
+        }
+
         writeDeliveryReceipt({
           payload,
           gatewayAddress,
-          signedPayload: signed ? payload : null,
-          signature:     signed?.signature     || null,
-          signerAddress: signed?.signerAddress || null,
+          signedPayload:       signed ? payload : null,
+          signature:           signed?.signature     || null,
+          signerAddress:       signed?.signerAddress || null,
+          providerAttestation: verifiedProviderAttestation,
         })
       } catch (e) {
         console.warn(`[Receipt] write failed for ${taskId}: ${e.message}`)
