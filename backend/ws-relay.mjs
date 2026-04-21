@@ -124,7 +124,7 @@ export function getRelayStatus(agentId) {
  * @param {string} taskType
  * @param {object} input
  * @param {number} timeoutMs
- * @returns {Promise<object>}
+ * @returns {Promise<{ output: object, attestation: ({payload: object, signature: string}|null) }>}
  */
 export function relayTask(agentId, taskId, taskType, input, timeoutMs) {
   const conn = connections.get(agentId)
@@ -337,7 +337,7 @@ function handleMessage(agentId, raw) {
     if (msg.error) {
       pending.reject(new Error(msg.error))
     } else {
-      pending.resolve(msg.output)
+      pending.resolve({ output: msg.output, attestation: msg.attestation || null })
     }
     return
   }

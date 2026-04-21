@@ -111,8 +111,8 @@ await test('online agent → task routed through relay', async () => {
 
   // This is what server.mjs does in the relay branch
   const taskId = `task-${randomBytes(16).toString('hex')}`
-  const result = await relayTask(AGENT_ID, taskId, 'test-type', { q: 'hello' }, 5000)
-  assert.deepEqual(result, { score: 99 })
+  const res = await relayTask(AGENT_ID, taskId, 'test-type', { q: 'hello' }, 5000)
+  assert.deepEqual(res.output, { score: 99 })
 
   ws.close()
   await new Promise(r => setTimeout(r, 200))
@@ -152,7 +152,7 @@ await test('concurrent tasks to same relay agent', async () => {
   const results = await Promise.all(tasks)
 
   for (let i = 0; i < 5; i++) {
-    assert.deepEqual(results[i], { echo: i }, `task ${i} result mismatch`)
+    assert.deepEqual(results[i].output, { echo: i }, `task ${i} result mismatch`)
   }
 
   ws.close()

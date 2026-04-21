@@ -543,11 +543,14 @@ async function handleTask(req, res) {
 
   try {
     let result
+    let providerAttestation = null
     const sentAt = Date.now() - start
 
     if (relay.connected) {
       console.log(`[Backend] Task ${taskId} → relay (${agentId})`)
-      result = await relayTask(agentId, taskId, taskType, sanitizedInput, 60000)
+      const relayRes = await relayTask(agentId, taskId, taskType, sanitizedInput, 60000)
+      result = relayRes.output
+      providerAttestation = relayRes.attestation
     } else {
       console.log(`[Backend] Task ${taskId} → Streamr P2P (${workerStream})`)
       await gateway.sendTask(workerStream, { type, input: sanitizedInput, taskId })

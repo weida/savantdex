@@ -260,8 +260,9 @@ await test('task routing — relayTask resolves on result', async () => {
     }
   })
 
-  const output = await relayTask(AGENT_ID, 'task-001', 'test-type', { q: 'hello' }, 5000)
-  assert.deepEqual(output, { answer: 42 })
+  const res = await relayTask(AGENT_ID, 'task-001', 'test-type', { q: 'hello' }, 5000)
+  assert.deepEqual(res.output, { answer: 42 })
+  assert.equal(res.attestation, null, 'no attestation when stub omits it')
 
   await close(ws)
   await new Promise(r => setTimeout(r, 200))
