@@ -41,9 +41,9 @@ jobs:
       - name: Install savantdex deps
         run: npm install
 
-      - name: Verify sdk/registry.mjs imports resolve
-        run: node --input-type=module <<'EOF'
-          import('./sdk/registry.mjs')
-            .then(() => console.log('sdk/registry.mjs OK'))
-            .catch(e => { console.error('FAIL:', e.message); process.exit(1) })
-          EOF
+      - name: Verify sdk imports resolve
+        run: |
+          node -e "import('./sdk/registry.mjs').then(() => console.log('sdk/registry.mjs OK')).catch(e => { console.error('FAIL:', e.message); process.exit(1) })"
+          node -e "import('./sdk/canonical.mjs').then(() => console.log('sdk/canonical.mjs OK')).catch(e => { console.error('FAIL:', e.message); process.exit(1) })"
+          node -e "import('./sdk/attestation.mjs').then(() => console.log('sdk/attestation.mjs OK')).catch(e => { console.error('FAIL:', e.message); process.exit(1) })"
+          node -e "import('./sdk/relay-agent.mjs').then(() => console.log('sdk/relay-agent.mjs OK')).catch(e => { console.error('FAIL:', e.message); process.exit(1) })"
