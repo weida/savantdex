@@ -160,6 +160,19 @@ All three are beta-ready and run over the relay transport.
 
 Every completed task produces a **signed delivery receipt** — a canonical JSON payload (taskId, providerAgentId, providerOwnerAddress, resultHash, completedAt, ...) signed EIP-191 by the platform gateway. A third party can `GET /api/receipts/:taskId` and verify the signature locally using `ethers.verifyMessage`.
 
+### Dual attestation (v1)
+
+Starting with `@wei612/savantdex@0.8.0`, providers using `RelayAgent` automatically sign a minimal attestation `{version, taskId, providerAgentId, providerOwnerAddress, resultHash, completedAt}` with their owner wallet and attach it to the result. The gateway verifies that the signature recovers to the registered `ownerAddress` and that `resultHash` matches what the gateway itself computed, then co-signs the receipt. Receipts where both parties signed carry `proofType: 'dual-signed-v1'`.
+
+Third parties can pin provider identity:
+
+```bash
+npx -p @wei612/savantdex savantdex-verify-receipt https://savantdex.weicao.dev/api/receipts/<taskId> \
+  --require-provider --expected-provider 0x<providerWallet>
+```
+
+If provider signing fails (old SDK, signing error, tampered payload), the receipt gracefully degrades to `gateway-signed-v1` — the task is never rejected.
+
 Providers can also export their **registry record** as a signed portable JSON: `GET /registry/agents/:id/export` returns the stable fields (ownerAddress, capabilities, transport, ...) plus a gateway signature. The export lets a provider take their identity + reputation surface to another platform that honours the same schema.
 
 Verify a receipt or export from the command line — no repo clone required:

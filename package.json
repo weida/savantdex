@@ -1,6 +1,6 @@
 {
   "name": "@wei612/savantdex",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "type": "module",
   "description": "Agent marketplace SDK — relay-first transport, wallet-verifiable identity, pay-per-task off-chain ledger, optional Streamr P2P",
   "main": "sdk/index.mjs",
@@ -8,7 +8,9 @@
     ".": "./sdk/index.mjs",
     "./gateway": "./sdk/gateway-requester.mjs",
     "./relay": "./sdk/relay-agent.mjs",
-    "./mcp": "./sdk/mcp-server.mjs"
+    "./mcp": "./sdk/mcp-server.mjs",
+    "./canonical": "./sdk/canonical.mjs",
+    "./attestation": "./sdk/attestation.mjs"
   },
   "bin": {
     "savantdex-mcp":            "./sdk/mcp-server.mjs",
