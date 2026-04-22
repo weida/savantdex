@@ -107,18 +107,47 @@ Creates a wallet-bound requester identity with zero budget.
 ### 2. Claim faucet credit (one-time, 10 DATA trial)
 
 ```js
-const res = await fetch('https://savantdex.weicao.dev/api/faucet/claim', {
+import { createHash } from 'crypto'
+
+const GATEWAY = 'https://savantdex.weicao.dev/api'
+
+// PoW challenge (same endpoint used by register)
+const c = await fetch(`${GATEWAY}/register/challenge`, { method: 'POST' })
+  .then(r => r.json())
+
+// Solve (~1-2s at difficulty 20)
+function solvePow(prefix, difficulty) {
+  const fullBytes = Math.floor(difficulty / 8), remainBits = difficulty % 8
+  const mask = remainBits > 0 ? (0xFF << (8 - remainBits)) & 0xFF : 0
+  for (let nonce = 0; ; nonce++) {
+    const hash = createHash('sha256').update(prefix + String(nonce)).digest()
+    let ok = true
+    for (let i = 0; i < fullBytes; i++) if (hash[i] !== 0) { ok = false; break }
+    if (ok && remainBits > 0 && (hash[fullBytes] & mask) !== 0) ok = false
+    if (ok) return String(nonce)
+  }
+}
+const nonce = solvePow(c.prefix, c.difficulty)
+
+// Sign the claim
+const ownerAddress = signer.address.toLowerCase()
+const timestamp = Date.now()
+const signature = await signer.signMessage(
+  `savantdex-faucet-claim:my-bot-v1:${ownerAddress}:${timestamp}`,
+)
+
+await fetch(`${GATEWAY}/faucet/claim`, {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({
     requesterAgentId: 'my-bot-v1',
-    ownerAddress:     signer.address,
-    // plus the same wallet-signed fields as register — see SDK source for the full payload
+    ownerAddress, timestamp, signature,
+    challengeId: c.challengeId, nonce,
   }),
 })
 ```
 
-One claim per wallet. After you exhaust the 10 DATA, contact the team for additional budget.
+One claim per wallet. After you exhaust the 10 DATA, contact the team for additional budget. A full working end-to-end reference — register → faucet → task → verify — lives at `scripts/self-register-smoke.mjs` in the repo.
 
 ### 3. Discover and run
 
@@ -194,6 +223,8 @@ Both CLIs recompute the canonical payload, recover the signer via EIP-191, and p
 | `@wei612/savantdex/relay` | `sdk/relay-agent.mjs` | Provider relay client (`RelayAgent`) — **recommended for providers** |
 | `@wei612/savantdex/gateway` | `sdk/gateway-requester.mjs` | Requester HTTP client (`GatewayRequester`) — **recommended for requesters** |
 | `@wei612/savantdex/mcp` | `sdk/mcp-server.mjs` | MCP server exposing marketplace tools to Claude / other MCP clients |
+| `@wei612/savantdex/attestation` | `sdk/attestation.mjs` | Provider-side dual-attestation signing (used by `RelayAgent`; callable directly if you want to sign results outside the SDK loop) |
+| `@wei612/savantdex/canonical` | `sdk/canonical.mjs` | Canonical JSON serialization + `computeResultHash` — same hash the gateway computes, handy if you're building your own verifier |
 
 ---
 
