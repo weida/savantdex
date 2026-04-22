@@ -5,14 +5,28 @@
 
 import { initDb, resolveApiKey, preInvocationCheck, writeSubmitted,
          markStatus, chargeCompleted, getBudget, getProviderReceivable, seedRequester,
-         writeDeliveryReceipt } from './payment.mjs'
+         writeDeliveryReceipt, computeResultHash, getTaskTrace } from './payment.mjs'
+import { buildReceiptPayload } from './receipt.mjs'
 
 // Phase C evidence gate: chargeCompleted requires a DeliveryReceipt for
 // agreementVersion >= 2. These tests run in-process and never go through the
-// real gateway task loop, so the receipt must be written explicitly.
+// real gateway task loop, so the receipt must be written explicitly with the
+// same canonical payload shape the server builds in production.
 function completeTask(taskId) {
   markStatus(taskId, 'completed')
-  writeDeliveryReceipt({ taskId, result: { status: 'completed' } })
+  const { agreement } = getTaskTrace(taskId)
+  const result = { status: 'completed' }
+  const payload = buildReceiptPayload({
+    taskId,
+    agreementHash:        agreement?.agreementHash || null,
+    providerAgentId:      agreement?.providerAgentId || 'agent-test',
+    providerOwnerAddress: agreement?.providerOwnerAddress || null,
+    requesterAgentId:     agreement?.requesterAgentId || null,
+    taskType:             agreement?.taskType || 'test',
+    resultHash:           computeResultHash(result),
+    completedAt:          new Date().toISOString(),
+  })
+  writeDeliveryReceipt({ payload })
 }
 
 let passed = 0

@@ -48,8 +48,9 @@ import {
   initDb, resolveRequester, resolveApiKey, getAuthMethods, getRequesterIdentity, bindWalletMethod,
   createChallenge, getChallenge, consumeChallengeAndCreateSession, resolveSession, revokeSession,
   seedRequester, preInvocationCheck, writeSubmitted, markStatus,
-  chargeCompleted, getBudget, writeDeliveryReceipt,
+  chargeCompleted, getBudget, writeDeliveryReceipt, computeResultHash, getTaskTrace,
 } from './payment.mjs'
+import { buildReceiptPayload } from './receipt.mjs'
 
 function tmpDb() {
   return join(tmpdir(), `payment-phaseD-${randomBytes(6).toString('hex')}.db`)
@@ -224,7 +225,21 @@ test('D1-9: payment flow works end-to-end using resolveRequester result', () => 
   markStatus(taskId, 'completed')
 
   // Write delivery receipt so evidence gate passes (agreementVersion=2)
-  writeDeliveryReceipt({ taskId, result: { output: 'ok' }, gatewayAddress: '0x222' })
+  {
+    const { agreement } = getTaskTrace(taskId)
+    const result = { output: 'ok' }
+    const payload = buildReceiptPayload({
+      taskId,
+      agreementHash:        agreement?.agreementHash || null,
+      providerAgentId:      agreement?.providerAgentId || 'test-agent',
+      providerOwnerAddress: agreement?.providerOwnerAddress || '0x333',
+      requesterAgentId:     agreement?.requesterAgentId || identity.requesterAgentId,
+      taskType:             agreement?.taskType || 'test-type',
+      resultHash:           computeResultHash(result),
+      completedAt:          new Date().toISOString(),
+    })
+    writeDeliveryReceipt({ payload, gatewayAddress: '0x222' })
+  }
 
   const { charged } = chargeCompleted(taskId)
   assert.ok(charged, 'charge should succeed')

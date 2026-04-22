@@ -17,6 +17,23 @@
 
 import { initDb, writeSubmitted, markStatus, chargeCompleted,
          seedRequester, getTaskTrace, computeResultHash, writeDeliveryReceipt } from './payment.mjs'
+import { buildReceiptPayload } from './receipt.mjs'
+
+/** Build a canonical Phase-C DeliveryReceipt row for a completed task. */
+function writeTestReceipt(taskId, result, { gatewayAddress = null } = {}) {
+  const { agreement } = getTaskTrace(taskId)
+  const payload = buildReceiptPayload({
+    taskId,
+    agreementHash:        agreement?.agreementHash || null,
+    providerAgentId:      agreement?.providerAgentId || null,
+    providerOwnerAddress: agreement?.providerOwnerAddress || null,
+    requesterAgentId:     agreement?.requesterAgentId || null,
+    taskType:             agreement?.taskType || 'test',
+    resultHash:           computeResultHash(result),
+    completedAt:          new Date().toISOString(),
+  })
+  writeDeliveryReceipt({ payload, gatewayAddress })
+}
 
 let passed = 0
 let failed = 0
@@ -182,7 +199,7 @@ console.log('\nC8: full happy path — both evidence records valid → charge su
     gatewayAddress: '0xgateway',
   })
   markStatus('task-c8', 'completed')
-  writeDeliveryReceipt({ taskId: 'task-c8', result: { answer: 42 }, gatewayAddress: '0xgateway' })
+  writeTestReceipt('task-c8', { answer: 42 }, { gatewayAddress: '0xgateway' })
   const result = chargeCompleted('task-c8')
   assert(result.charged === true, 'charge succeeds')
   // Verify DeliveryReceipt agreementHash
@@ -210,7 +227,7 @@ console.log('\nC10: getTaskTrace returns agreementProof and deliveryReceipt')
     providerOwnerAddress: PROVIDER, taskType: 'test', pricingModel: FIXED,
     gatewayAddress: '0xgateway' })
   markStatus('task-c10', 'completed')
-  writeDeliveryReceipt({ taskId: 'task-c10', result: { ok: true }, gatewayAddress: '0xgateway' })
+  writeTestReceipt('task-c10', { ok: true }, { gatewayAddress: '0xgateway' })
 
   const trace = getTaskTrace('task-c10')
   assert(trace.agreementProof !== null, 'agreementProof present in trace')
